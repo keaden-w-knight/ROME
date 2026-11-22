@@ -1,0 +1,110 @@
+{
+  "version": "2.0.0",
+  "options": {
+    "cwd": "${workspaceFolder}"
+  },
+  "presentation": {
+    "reveal": "always",
+    "panel": "shared",
+    "clear": true
+  },
+  "tasks": [
+    {
+      "label": "CMake: configure (debug)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/scripts/dev-shell.ps1",
+        "-Run", "cmake --preset msvc-debug"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: build (debug)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/scripts/dev-shell.ps1",
+        "-Run", "cmake --build --preset msvc-debug"
+      ],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "CMake: build (release)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/scripts/dev-shell.ps1",
+        "-Run", "cmake --build --preset msvc-release"
+      ],
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "CTest: run tests (debug)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/scripts/dev-shell.ps1",
+        "-Run", "ctest --preset msvc-debug"
+      ],
+      "dependsOn": "CMake: build (debug)",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: hello_triangle (C++)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/scripts/dev-shell.ps1",
+        "-Run", "./build/msvc-debug/bin/hello_triangle.exe"
+      ],
+      "dependsOn": "CMake: build (debug)",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: hello_triangle (Python)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/scripts/dev-shell.ps1",
+        "-Run", "python examples/hello_triangle.py"
+      ],
+      "dependsOn": "CMake: build (debug)",
+      "problemMatcher": []
+    },
+    {
+      "label": "Python: build wheel",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/scripts/dev-shell.ps1",
+        "-Run", "python -m pip wheel . -w dist --no-deps"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: wipe build directory",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["-E", "rm", "-rf", "${workspaceFolder}/build"],
+      "problemMatcher": []
+    }
+  ]
+}

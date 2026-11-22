@@ -1,0 +1,84 @@
+{
+  // ---- CMake Tools ----------------------------------------------------
+  "cmake.useCMakePresets": "always",
+  "cmake.defaultConfigurePreset": "msvc-debug",
+  "cmake.defaultBuildPreset": "msvc-debug",
+  "cmake.defaultTestPreset": "msvc-debug",
+  // The Ninja generator needs cl.exe and the Windows SDK already on PATH.
+  // This lets CMake Tools apply the VS developer environment itself; the
+  // tasks in tasks.json go through scripts/dev-shell.ps1 and do not rely on it.
+  "cmake.useVsDeveloperEnvironment": "always",
+  "cmake.configureOnOpen": false,
+  "cmake.buildBeforeRun": true,
+  "cmake.ctest.testExplorerIntegrationEnabled": true,
+
+  // ---- IntelliSense ---------------------------------------------------
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/msvc-debug/compile_commands.json",
+  "C_Cpp.default.cppStandard": "c++23",
+  "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+
+  // ---- Python ---------------------------------------------------------
+  // Pinned deliberately: MSYS2 ships a Python 3.14 that sits earlier on PATH
+  // (it arrived as a gdb dependency) and the extension module is not built
+  // for it. See scripts/dev-shell.ps1.
+  "python.defaultInterpreterPath": "C:\\Users\\Keaden\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+  "python.analysis.extraPaths": ["${workspaceFolder}/build/msvc-debug/bin"],
+  "python.terminal.activateEnvironment": false,
+
+  // ---- Formatting -----------------------------------------------------
+  "C_Cpp.formatting": "clangFormat",
+  "C_Cpp.clang_format_style": "file",
+  "[cpp]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools",
+    "editor.formatOnSave": true
+  },
+  "[c]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools",
+    "editor.formatOnSave": true
+  },
+  "[cmake]": {
+    "editor.defaultFormatter": "twxs.cmake"
+  },
+
+  // ---- Editor ---------------------------------------------------------
+  "editor.rulers": [100],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.associations": {
+    "*.ipp": "cpp",
+    "*.tpp": "cpp",
+    "*.inl": "cpp",
+    "*.vert": "glsl",
+    "*.frag": "glsl",
+    "*.comp": "glsl",
+    "*.glsl": "glsl"
+  },
+
+  // ---- Noise reduction ------------------------------------------------
+  "files.exclude": {
+    "**/build": true,
+    "**/__pycache__": true
+  },
+  "search.exclude": {
+    "**/build": true,
+    "**/dist": true,
+    "**/__pycache__": true
+  },
+
+  // ---- Terminal -------------------------------------------------------
+  // Opens a shell already in the MSVC + correct-Python environment.
+  "terminal.integrated.profiles.windows": {
+    "ROME dev (MSVC)": {
+      "path": "powershell.exe",
+      "args": [
+        "-NoExit",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", ". '${workspaceFolder}/scripts/dev-shell.ps1'"
+      ],
+      "icon": "tools"
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "ROME dev (MSVC)"
+}

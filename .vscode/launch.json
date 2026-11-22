@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // cppvsdbg, not cppdbg/gdb: these binaries are MSVC-built and carry PDBs.
+      "name": "C++: hello_triangle",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/msvc-debug/bin/hello_triangle.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: build (debug)"
+    },
+    {
+      "name": "C++: rome_tests",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/msvc-debug/bin/rome_tests.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: build (debug)"
+    },
+    {
+      "name": "Python: hello_triangle",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/examples/hello_triangle.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/build/msvc-debug/bin"
+      },
+      "preLaunchTask": "CMake: build (debug)"
+    },
+    {
+      // Attaches the native debugger to a running Python process, so a
+      // breakpoint in the C++ can be hit from a Python call. Start the Python
+      // side first, then pick its python.exe from the process list.
+      "name": "C++: attach to python.exe",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    }
+  ]
+}

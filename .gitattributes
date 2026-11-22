@@ -1,0 +1,15 @@
+# Normalise to LF in the repository; Git checks out native line endings.
+* text=auto eol=lf
+
+# Windows-native tooling that some editors and shells expect as CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never munge binaries.
+*.png  binary
+*.jpg  binary
+*.spv  binary
+*.pyd  binary
+*.dll  binary
+*.lib  binary
+*.exe  binary
