@@ -18,6 +18,32 @@ int g_live_windows = 0;
     throw Error(std::string{what} + ": " + SDL_GetError());
 }
 
+/// Maps an SDL scancode to the framework's key name, or "" to ignore it.
+std::string key_name(SDL_Scancode sc) {
+    switch (sc) {
+        case SDL_SCANCODE_ESCAPE:
+            return "escape";
+        case SDL_SCANCODE_SPACE:
+            return "space";
+        case SDL_SCANCODE_RETURN:
+            return "enter";
+        case SDL_SCANCODE_UP:
+            return "w";
+        case SDL_SCANCODE_DOWN:
+            return "s";
+        case SDL_SCANCODE_LEFT:
+            return "a";
+        case SDL_SCANCODE_RIGHT:
+            return "d";
+        default:
+            break;
+    }
+    if (sc >= SDL_SCANCODE_A && sc <= SDL_SCANCODE_Z) {
+        return std::string(1, static_cast<char>('a' + (sc - SDL_SCANCODE_A)));
+    }
+    return "";
+}
+
 }  // namespace
 
 Window::Window(const WindowConfig& config) {
@@ -54,7 +80,9 @@ Window::~Window() {
 Window::Window(Window&& other) noexcept
     : window_(std::exchange(other.window_, nullptr)),
       should_close_(other.should_close_),
-      resized_(other.resized_) {}
+      resized_(other.resized_),
+      held_keys_(std::move(other.held_keys_)),
+      pressed_keys_(std::move(other.pressed_keys_)) {}
 
 Window& Window::operator=(Window&& other) noexcept {
     if (this != &other) {
@@ -65,6 +93,8 @@ Window& Window::operator=(Window&& other) noexcept {
         window_ = std::exchange(other.window_, nullptr);
         should_close_ = other.should_close_;
         resized_ = other.resized_;
+        held_keys_ = std::move(other.held_keys_);
+        pressed_keys_ = std::move(other.pressed_keys_);
     }
     return *this;
 }
@@ -91,17 +121,43 @@ bool Window::pump_events() {
                 }
                 break;
 
-            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_DOWN: {
                 if (event.key.key == SDLK_ESCAPE) {
                     should_close_ = true;
                 }
+                const std::string name = key_name(event.key.scancode);
+                if (!name.empty()) {
+                    held_keys_.insert(name);
+                    if (!event.key.repeat) {
+                        pressed_keys_.push_back(name);
+                    }
+                }
                 break;
+            }
+
+            case SDL_EVENT_KEY_UP: {
+                const std::string name = key_name(event.key.scancode);
+                if (!name.empty()) {
+                    held_keys_.erase(name);
+                }
+                break;
+            }
 
             default:
                 break;
         }
     }
     return !should_close_;
+}
+
+std::vector<std::string> Window::keys_held() const {
+    return std::vector<std::string>(held_keys_.begin(), held_keys_.end());
+}
+
+std::vector<std::string> Window::take_pressed() {
+    std::vector<std::string> out = std::move(pressed_keys_);
+    pressed_keys_.clear();
+    return out;
 }
 
 Extent2D Window::framebuffer_size() const {

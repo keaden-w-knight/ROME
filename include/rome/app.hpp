@@ -64,6 +64,12 @@ public:
                                               const std::vector<MeshInstance>& instances,
                                               const CameraParams& camera);
 
+    /// Keys currently held down (see Window::keys_held for the naming).
+    [[nodiscard]] std::vector<std::string> keys_held() const;
+
+    /// Keys pressed since the previous call, then cleared.
+    std::vector<std::string> take_pressed_keys();
+
     void close() {
         window_.request_close();
     }

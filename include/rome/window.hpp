@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 #include "rome/types.hpp"
 
@@ -51,6 +53,13 @@ public:
     /// True for exactly one pump_events() call after the size changed.
     [[nodiscard]] bool consume_resize_flag();
 
+    /// Keys currently held down (lowercase letters, plus "escape"/"space"/
+    /// "enter"; arrow keys report as w/a/s/d to mirror the ASCII backend).
+    [[nodiscard]] std::vector<std::string> keys_held() const;
+
+    /// Keys pressed since the previous call, then cleared (press edges).
+    std::vector<std::string> take_pressed();
+
     [[nodiscard]] SDL_Window* handle() const {
         return window_;
     }
@@ -59,6 +68,8 @@ private:
     SDL_Window* window_ = nullptr;
     bool should_close_ = false;
     bool resized_ = false;
+    std::unordered_set<std::string> held_keys_;
+    std::vector<std::string> pressed_keys_;
 };
 
 }  // namespace rome

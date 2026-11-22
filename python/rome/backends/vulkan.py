@@ -3,8 +3,8 @@ default backend, and full colour.
 
 It renders the scene's meshes on the GPU — lit, depth-tested, through the camera.
 Meshes are uploaded once (cached by identity) and drawn each frame by handle.
-Input surfacing (keyboard) is still on the roadmap, so `poll_input` is empty for
-now; the window's close button still works.
+Keyboard input is surfaced from SDL, so the game can steer the camera; the
+window's close button and Escape also stop the loop.
 """
 
 from __future__ import annotations
@@ -53,8 +53,11 @@ class VulkanBackend(Backend):
         return handle
 
     def poll_input(self) -> InputState:
-        # Surfacing SDL events to Python is on ROME's roadmap.
-        return InputState.empty()
+        if self._app is None:
+            return InputState.empty()
+        held = frozenset(self._app.keys_held())
+        pressed = frozenset(self._app.take_pressed_keys())
+        return InputState(held=held, pressed=pressed)
 
     def render(self, scene: Scene, camera: Camera) -> None:
         instances = [

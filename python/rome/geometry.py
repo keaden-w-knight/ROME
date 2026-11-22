@@ -25,25 +25,27 @@ class Geometry:
 
 
 def cube() -> Geometry:
-    v = [
-        (-1.0, -1.0, -1.0),
-        (1.0, -1.0, -1.0),
-        (1.0, 1.0, -1.0),
-        (-1.0, 1.0, -1.0),
-        (-1.0, -1.0, 1.0),
-        (1.0, -1.0, 1.0),
-        (1.0, 1.0, 1.0),
-        (-1.0, 1.0, 1.0),
+    # Each face gets its own four vertices carrying the face normal, so edges
+    # stay crisp (shared vertices with averaged normals would round them off).
+    faces = [
+        ((1.0, 0.0, 0.0), [(1, -1, -1), (1, 1, -1), (1, 1, 1), (1, -1, 1)]),
+        ((-1.0, 0.0, 0.0), [(-1, -1, 1), (-1, 1, 1), (-1, 1, -1), (-1, -1, -1)]),
+        ((0.0, 1.0, 0.0), [(-1, 1, -1), (-1, 1, 1), (1, 1, 1), (1, 1, -1)]),
+        ((0.0, -1.0, 0.0), [(-1, -1, 1), (-1, -1, -1), (1, -1, -1), (1, -1, 1)]),
+        ((0.0, 0.0, 1.0), [(-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1)]),
+        ((0.0, 0.0, -1.0), [(1, -1, -1), (-1, -1, -1), (-1, 1, -1), (1, 1, -1)]),
     ]
-    t = [
-        (0, 1, 2), (0, 2, 3),  # -Z
-        (5, 4, 7), (5, 7, 6),  # +Z
-        (4, 0, 3), (4, 3, 7),  # -X
-        (1, 5, 6), (1, 6, 2),  # +X
-        (4, 5, 1), (4, 1, 0),  # -Y
-        (3, 2, 6), (3, 6, 7),  # +Y
-    ]
-    return _build(v, t)
+    verts: list[Vec3] = []
+    normals: list[Vec3] = []
+    tris: list[tuple[int, int, int]] = []
+    for normal, corners in faces:
+        base = len(verts)
+        for c in corners:
+            verts.append((float(c[0]), float(c[1]), float(c[2])))
+            normals.append(normal)
+        tris.append((base, base + 1, base + 2))
+        tris.append((base, base + 2, base + 3))
+    return _build(verts, tris, normals)
 
 
 def sphere(segments: int = 32, rings: int = 20) -> Geometry:
@@ -95,9 +97,16 @@ def load_obj(path: str) -> Geometry:
     return _build(verts, tris)
 
 
-def _build(verts: list[Vec3], tris: list[tuple[int, int, int]]) -> Geometry:
+def _build(
+    verts: list[Vec3],
+    tris: list[tuple[int, int, int]],
+    normals: list[Vec3] | None = None,
+) -> Geometry:
     verts = _center_and_scale(verts)
-    normals = _vertex_normals(verts, tris)
+    # Explicit normals (e.g. a cube's per-face normals) are kept; otherwise smooth
+    # per-vertex normals are computed. Centering/uniform scale don't change them.
+    if normals is None:
+        normals = _vertex_normals(verts, tris)
     positions: list[float] = []
     for v in verts:
         positions.extend(v)

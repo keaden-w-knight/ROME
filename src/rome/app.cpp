@@ -116,6 +116,14 @@ std::vector<std::uint8_t> App::render_to_image(std::uint32_t width, std::uint32_
     return renderer_->render_offscreen(clear_color_, width, height, camera, instances);
 }
 
+std::vector<std::string> App::keys_held() const {
+    return window_.keys_held();
+}
+
+std::vector<std::string> App::take_pressed_keys() {
+    return window_.take_pressed();
+}
+
 void App::update_timing() {
     const std::uint64_t now = SDL_GetPerformanceCounter();
     const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());

@@ -152,6 +152,10 @@ NB_MODULE(_rome, m) {
             "up"_a = std::make_tuple(0.0F, 1.0F, 0.0F), "fov"_a = 50.0F,
             "Render a scene off-screen; returns width*height*4 RGBA8 bytes.")
 
+        .def("keys_held", &rome::App::keys_held, "List of keys currently held down.")
+        .def("take_pressed_keys", &rome::App::take_pressed_keys,
+             "List of keys pressed since the last call (then cleared).")
+
         .def("close", &rome::App::close, "Ask the loop to stop after this frame.")
 
         .def_prop_ro("running", &rome::App::is_running)
