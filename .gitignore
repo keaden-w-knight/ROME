@@ -40,3 +40,7 @@ wheelhouse/
 venv/
 
 # CMake FetchContent caches live under build/, already ignored above.
+
+# Scaffolded test projects created in-tree
+/mygame/
+/*-game/
