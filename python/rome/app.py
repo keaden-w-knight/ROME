@@ -68,6 +68,12 @@ class App:
         """Render the current scene from the current camera."""
         self._backend.render(self.scene, self.camera)
 
+    def render_image(self, width: int = 1280, height: int = 720) -> bytes:
+        """Render the current scene off-screen (no window drawing) and return
+        width*height*4 RGBA8 bytes. Backend-dependent; the vulkan backend
+        supports it. Pair with rome.save_png."""
+        return self._backend.render_image(self.scene, self.camera, width, height)
+
     def run(self, update: Callable[["App"], None] | None = None) -> None:
         """Drive the loop to completion. `update(app)` runs each frame before the
         draw — move the camera, step the world, read `app.input`, `app.dt`."""

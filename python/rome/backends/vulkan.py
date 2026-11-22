@@ -69,6 +69,21 @@ class VulkanBackend(Backend):
             fov=camera.fov,
         )
 
+    def render_image(self, scene: Scene, camera: Camera, width: int, height: int) -> bytes:
+        instances = [
+            (self._realize(node.mesh), node.position, node.rotation, node.scale)
+            for node in scene.nodes
+        ]
+        return self._app.render_to_image(
+            instances,
+            width,
+            height,
+            cam_pos=camera.position,
+            cam_target=camera.target,
+            up=camera.up,
+            fov=camera.fov,
+        )
+
     def should_close(self) -> bool:
         return not self._running
 

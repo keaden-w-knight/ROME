@@ -52,6 +52,11 @@ class Backend(ABC):
     def close(self) -> None:
         """Release everything."""
 
+    def render_image(self, scene: Scene, camera: Camera, width: int, height: int) -> bytes:
+        """Render the scene off-screen and return width*height*4 RGBA8 bytes.
+        Optional: backends that cannot render off-screen raise."""
+        raise NotImplementedError(f"the {self.name} backend has no off-screen render")
+
     def info(self) -> str:
         """A human-readable line about the backend (device name, mode, …)."""
         return self.name

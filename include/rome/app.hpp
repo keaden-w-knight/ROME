@@ -58,6 +58,12 @@ public:
     /// has been closed, so it reads as a while condition like tick().
     bool render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera);
 
+    /// Renders a scene to an off-screen image (no window needed) and returns its
+    /// pixels as RGBA8, width*height*4 bytes, top row first.
+    std::vector<std::uint8_t> render_to_image(std::uint32_t width, std::uint32_t height,
+                                              const std::vector<MeshInstance>& instances,
+                                              const CameraParams& camera);
+
     void close() {
         window_.request_close();
     }

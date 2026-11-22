@@ -110,6 +110,12 @@ bool App::render_scene(const std::vector<MeshInstance>& instances, const CameraP
     return true;
 }
 
+std::vector<std::uint8_t> App::render_to_image(std::uint32_t width, std::uint32_t height,
+                                               const std::vector<MeshInstance>& instances,
+                                               const CameraParams& camera) {
+    return renderer_->render_offscreen(clear_color_, width, height, camera, instances);
+}
+
 void App::update_timing() {
     const std::uint64_t now = SDL_GetPerformanceCounter();
     const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());

@@ -650,14 +650,26 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
     scissor.extent = VkExtent2D{extent.width, extent.height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    record_mesh_draws(cmd, extent.width, extent.height, camera, instances);
+
+    vkCmdEndRendering(cmd);
+
+    transition_image(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+    ROME_VK_CHECK(vkEndCommandBuffer(cmd));
+}
+
+void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height,
+                                 const CameraParams& camera,
+                                 const std::vector<MeshInstance>& instances) const {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipeline_);
 
     const glm::vec3 eye{camera.position[0], camera.position[1], camera.position[2]};
     const glm::vec3 center{camera.target[0], camera.target[1], camera.target[2]};
     const glm::vec3 up{camera.up[0], camera.up[1], camera.up[2]};
     const float aspect =
-        extent.height != 0 ? static_cast<float>(extent.width) / static_cast<float>(extent.height)
-                           : 1.0F;
+        height != 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
     const glm::mat4 view = glm::lookAt(eye, center, up);
     glm::mat4 proj = glm::perspective(glm::radians(camera.fov_deg), aspect, 0.1F, 100.0F);
     proj[1][1] *= -1.0F;  // Vulkan clip space has +Y down relative to GLM's default
@@ -690,13 +702,180 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
         vkCmdBindIndexBuffer(cmd, it->second.index_buffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, it->second.index_count, 1, 0, 0, 0);
     }
+}
 
-    vkCmdEndRendering(cmd);
+std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uint32_t width,
+                                                     std::uint32_t height,
+                                                     const CameraParams& camera,
+                                                     const std::vector<MeshInstance>& instances) {
+    const VkDevice device = context_.device();
+    const VmaAllocator allocator = context_.allocator();
+    const VkFormat color_format = swapchain_.format();
 
-    transition_image(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    // Off-screen colour target (also a transfer source, for readback).
+    VkImage color_image = VK_NULL_HANDLE;
+    VmaAllocation color_alloc = VK_NULL_HANDLE;
+    VkImageView color_view = VK_NULL_HANDLE;
+    {
+        VkImageCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        info.imageType = VK_IMAGE_TYPE_2D;
+        info.format = color_format;
+        info.extent = VkExtent3D{width, height, 1};
+        info.mipLevels = 1;
+        info.arrayLayers = 1;
+        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        ROME_VK_CHECK(vmaCreateImage(allocator, &info, &alloc, &color_image, &color_alloc, nullptr));
 
-    ROME_VK_CHECK(vkEndCommandBuffer(cmd));
+        VkImageViewCreateInfo view_info{};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = color_image;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = color_format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+        ROME_VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &color_view));
+    }
+
+    // Off-screen depth target.
+    VkImage depth_image = VK_NULL_HANDLE;
+    VmaAllocation depth_alloc = VK_NULL_HANDLE;
+    VkImageView depth_view = VK_NULL_HANDLE;
+    {
+        VkImageCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        info.imageType = VK_IMAGE_TYPE_2D;
+        info.format = depth_format_;
+        info.extent = VkExtent3D{width, height, 1};
+        info.mipLevels = 1;
+        info.arrayLayers = 1;
+        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        ROME_VK_CHECK(vmaCreateImage(allocator, &info, &alloc, &depth_image, &depth_alloc, nullptr));
+
+        VkImageViewCreateInfo view_info{};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = depth_image;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = depth_format_;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+        ROME_VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &depth_view));
+    }
+
+    // Host-visible buffer to copy the rendered image into.
+    const VkDeviceSize byte_count = static_cast<VkDeviceSize>(width) * height * 4;
+    VkBuffer readback = VK_NULL_HANDLE;
+    VmaAllocation readback_alloc = VK_NULL_HANDLE;
+    VmaAllocationInfo readback_info{};
+    {
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = byte_count;
+        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        ROME_VK_CHECK(
+            vmaCreateBuffer(allocator, &info, &alloc, &readback, &readback_alloc, &readback_info));
+    }
+
+    context_.immediate_submit([&](VkCommandBuffer cmd) {
+        transition_image(cmd, color_image, VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        transition_image(cmd, depth_image, VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+        VkRenderingAttachmentInfo color_attachment{};
+        color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color_attachment.imageView = color_view;
+        color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color_attachment.clearValue.color.float32[0] = clear_color.r;
+        color_attachment.clearValue.color.float32[1] = clear_color.g;
+        color_attachment.clearValue.color.float32[2] = clear_color.b;
+        color_attachment.clearValue.color.float32[3] = clear_color.a;
+
+        VkRenderingAttachmentInfo depth_attachment{};
+        depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth_attachment.imageView = depth_view;
+        depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth_attachment.clearValue.depthStencil.depth = 1.0F;
+
+        VkRenderingInfo rendering{};
+        rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        rendering.renderArea.extent = VkExtent2D{width, height};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &color_attachment;
+        rendering.pDepthAttachment = &depth_attachment;
+
+        vkCmdBeginRendering(cmd, &rendering);
+
+        VkViewport viewport{};
+        viewport.width = static_cast<float>(width);
+        viewport.height = static_cast<float>(height);
+        viewport.minDepth = 0.0F;
+        viewport.maxDepth = 1.0F;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.extent = VkExtent2D{width, height};
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        record_mesh_draws(cmd, width, height, camera, instances);
+
+        vkCmdEndRendering(cmd);
+
+        transition_image(cmd, color_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        VkBufferImageCopy copy{};
+        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.layerCount = 1;
+        copy.imageExtent = VkExtent3D{width, height, 1};
+        vkCmdCopyImageToBuffer(cmd, color_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1,
+                               &copy);
+    });
+
+    vmaInvalidateAllocation(allocator, readback_alloc, 0, byte_count);
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(byte_count));
+    std::memcpy(pixels.data(), readback_info.pMappedData, pixels.size());
+
+    // Swapchain formats are usually BGRA; hand Python straight RGBA.
+    if (color_format == VK_FORMAT_B8G8R8A8_UNORM || color_format == VK_FORMAT_B8G8R8A8_SRGB) {
+        for (std::size_t i = 0; i + 2 < pixels.size(); i += 4) {
+            const std::uint8_t tmp = pixels[i];
+            pixels[i] = pixels[i + 2];
+            pixels[i + 2] = tmp;
+        }
+    }
+
+    vmaDestroyBuffer(allocator, readback, readback_alloc);
+    vkDestroyImageView(device, depth_view, nullptr);
+    vmaDestroyImage(allocator, depth_image, depth_alloc);
+    vkDestroyImageView(device, color_view, nullptr);
+    vmaDestroyImage(allocator, color_image, color_alloc);
+
+    return pixels;
 }
 
 void Renderer::on_resize(Extent2D window_extent) {

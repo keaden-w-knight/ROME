@@ -60,6 +60,12 @@ public:
     bool draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
                     const std::vector<MeshInstance>& instances);
 
+    /// Renders a scene to an off-screen image and returns its pixels as RGBA8
+    /// (row-major, top row first), width*height*4 bytes. No window involved.
+    std::vector<std::uint8_t> render_offscreen(Color clear_color, std::uint32_t width,
+                                               std::uint32_t height, const CameraParams& camera,
+                                               const std::vector<MeshInstance>& instances);
+
     /// Rebuilds the swapchain (and depth buffer) at the given size. Safe to call
     /// with an empty extent (minimised), in which case it does nothing.
     void on_resize(Extent2D window_extent);
@@ -85,6 +91,13 @@ private:
     void record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
                       const CameraParams& camera,
                       const std::vector<MeshInstance>& instances) const;
+
+    // Binds the mesh pipeline and draws every instance; assumes rendering has
+    // begun and viewport/scissor are set. Shared by the windowed and off-screen
+    // paths.
+    void record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height,
+                           const CameraParams& camera,
+                           const std::vector<MeshInstance>& instances) const;
 
     // The acquire / submit / present scaffolding, shared by both draw paths. The
     // record callback fills the command buffer for the acquired image.

@@ -27,6 +27,7 @@ from .backends import (
     register_backend,
 )
 from .camera import Camera
+from .image import save_png
 from .input import InputState
 from .scene import Mesh, Node, Scene
 
@@ -47,6 +48,7 @@ __all__ = [
     "Node",
     "Mesh",
     "InputState",
+    "save_png",
     "available_backends",
     "create_backend",
     "register_backend",
