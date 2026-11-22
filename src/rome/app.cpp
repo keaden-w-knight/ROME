@@ -77,6 +77,39 @@ void App::run() {
     }
 }
 
+std::uint64_t App::upload_mesh(const std::vector<float>& positions,
+                               const std::vector<float>& normals,
+                               const std::vector<std::uint32_t>& indices) {
+    return renderer_->upload_mesh(positions, normals, indices);
+}
+
+bool App::render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera) {
+    if (!window_.pump_events()) {
+        return false;
+    }
+
+    update_timing();
+
+    if (window_.is_minimised()) {
+        SDL_Delay(kMinimisedSleepMs);
+        return true;
+    }
+
+    const Extent2D size = window_.framebuffer_size();
+    if (size.is_empty()) {
+        SDL_Delay(kMinimisedSleepMs);
+        return true;
+    }
+
+    if (window_.consume_resize_flag()) {
+        renderer_->on_resize(size);
+    }
+
+    renderer_->draw_scene(clear_color_, size, camera, instances);
+    ++frame_count_;
+    return true;
+}
+
 void App::update_timing() {
     const std::uint64_t now = SDL_GetPerformanceCounter();
     const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());

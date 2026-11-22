@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "rome/types.hpp"
 #include "rome/window.hpp"
@@ -43,6 +45,18 @@ public:
 
     /// Runs tick() until the window closes.
     void run();
+
+    /// Uploads a mesh to the GPU and returns a handle for drawing it later.
+    /// `positions` and `normals` are flat xyz triples (same vertex count);
+    /// `indices` is a triangle list. Upload once, draw many times.
+    std::uint64_t upload_mesh(const std::vector<float>& positions,
+                              const std::vector<float>& normals,
+                              const std::vector<std::uint32_t>& indices);
+
+    /// Processes events and draws one frame of a scene: each instance's mesh,
+    /// lit and depth-tested, seen through `camera`. Returns false once the window
+    /// has been closed, so it reads as a while condition like tick().
+    bool render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera);
 
     void close() {
         window_.request_close();

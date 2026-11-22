@@ -25,4 +25,22 @@ struct Color {
     friend bool operator==(const Color&, const Color&) = default;
 };
 
+/// A free look-at camera for a frame. Plain data, so the public headers stay
+/// free of GLM; the matrices are built in the renderer.
+struct CameraParams {
+    float position[3]{0.0F, 0.0F, -5.0F};
+    float target[3]{0.0F, 0.0F, 0.0F};
+    float up[3]{0.0F, 1.0F, 0.0F};
+    float fov_deg = 50.0F;
+};
+
+/// One placed mesh for a frame: a mesh handle (from App::upload_mesh) plus its
+/// transform. Rotation is Euler radians, applied Y -> X -> Z; scale is uniform.
+struct MeshInstance {
+    std::uint64_t mesh = 0;
+    float position[3]{0.0F, 0.0F, 0.0F};
+    float rotation[3]{0.0F, 0.0F, 0.0F};
+    float scale = 1.0F;
+};
+
 }  // namespace rome

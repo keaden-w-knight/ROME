@@ -1,17 +1,18 @@
 """Vulkan backend: the GPU window, via ROME's native `_rome` extension. The
-default backend.
+default backend, and full colour.
 
-Status: `_rome` today gives a window, a device, and a cleared frame — its
-scene-graph, camera, and mesh rendering are on ROME's roadmap. So this backend
-opens a real Vulkan window and runs the loop now, and will draw the scene as the
-native side grows. Until then, pick the `ascii` backend to see meshes.
+It renders the scene's meshes on the GPU — lit, depth-tested, through the camera.
+Meshes are uploaded once (cached by identity) and drawn each frame by handle.
+Input surfacing (keyboard) is still on the roadmap, so `poll_input` is empty for
+now; the window's close button still works.
 """
 
 from __future__ import annotations
 
+from .. import geometry
 from ..camera import Camera
 from ..input import InputState
-from ..scene import Scene
+from ..scene import Mesh, Scene
 from . import register_backend
 from .base import Backend, BackendConfig
 
@@ -21,37 +22,52 @@ class VulkanBackend(Backend):
 
     def __init__(self) -> None:
         self._app = None
+        self._cache: dict[int, int] = {}  # id(framework Mesh) -> native handle
         self._running = True
-        self._warned = False
 
     def open(self, config: BackendConfig) -> None:
         native = _load_native()
-        cc = tuple(config.clear_color)
         self._app = native.App(
             width=config.width,
             height=config.height,
             title=config.title,
             vsync=config.vsync,
-            clear_color=cc,
+            clear_color=tuple(config.clear_color),
         )
+
+    def _realize(self, mesh: Mesh) -> int:
+        """Framework Mesh -> native GPU handle, uploaded once and cached."""
+        handle = self._cache.get(id(mesh))
+        if handle is not None:
+            return handle
+        if mesh.kind == "sphere":
+            geo = geometry.sphere(mesh.segments, mesh.rings)
+        elif mesh.kind == "cube":
+            geo = geometry.cube()
+        elif mesh.kind == "obj":
+            geo = geometry.load_obj(mesh.path)
+        else:
+            raise ValueError(f"unknown mesh kind {mesh.kind!r}")
+        handle = self._app.upload_mesh(geo.positions, geo.normals, geo.indices)
+        self._cache[id(mesh)] = handle
+        return handle
 
     def poll_input(self) -> InputState:
         # Surfacing SDL events to Python is on ROME's roadmap.
         return InputState.empty()
 
     def render(self, scene: Scene, camera: Camera) -> None:
-        if scene.nodes and not self._warned:
-            import warnings
-
-            warnings.warn(
-                "the vulkan backend does not draw meshes yet (scene rendering is on "
-                "ROME's roadmap); it shows a cleared window. Use backend='ascii' to "
-                "render the scene.",
-                stacklevel=2,
-            )
-            self._warned = True
-        # _rome.App.tick() processes events, clears, and presents one frame.
-        self._running = self._app.tick()
+        instances = [
+            (self._realize(node.mesh), node.position, node.rotation, node.scale)
+            for node in scene.nodes
+        ]
+        self._running = self._app.render_scene(
+            instances,
+            cam_pos=camera.position,
+            cam_target=camera.target,
+            up=camera.up,
+            fov=camera.fov,
+        )
 
     def should_close(self) -> bool:
         return not self._running

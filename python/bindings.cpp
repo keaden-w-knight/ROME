@@ -1,8 +1,11 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
+#include <cstdint>
 #include <tuple>
+#include <vector>
 
 #include "rome/app.hpp"
 #include "rome/error.hpp"
@@ -68,6 +71,60 @@ NB_MODULE(_rome, m) {
              "Process events and draw one frame. Returns False once closed.")
         .def("run", &rome::App::run, nb::call_guard<nb::gil_scoped_release>(),
              "Run the loop until the window closes.")
+
+        .def(
+            "upload_mesh",
+            [](rome::App& self, const std::vector<float>& positions,
+               const std::vector<float>& normals, const std::vector<std::uint32_t>& indices) {
+                return self.upload_mesh(positions, normals, indices);
+            },
+            "positions"_a, "normals"_a, "indices"_a,
+            "Upload a mesh (flat xyz positions and normals, triangle-list indices). "
+            "Returns a handle to draw it with render_scene.")
+
+        .def(
+            "render_scene",
+            [](rome::App& self, nb::list instances, std::tuple<float, float, float> cam_pos,
+               std::tuple<float, float, float> cam_target, std::tuple<float, float, float> up,
+               float fov) {
+                rome::CameraParams camera{};
+                camera.position[0] = std::get<0>(cam_pos);
+                camera.position[1] = std::get<1>(cam_pos);
+                camera.position[2] = std::get<2>(cam_pos);
+                camera.target[0] = std::get<0>(cam_target);
+                camera.target[1] = std::get<1>(cam_target);
+                camera.target[2] = std::get<2>(cam_target);
+                camera.up[0] = std::get<0>(up);
+                camera.up[1] = std::get<1>(up);
+                camera.up[2] = std::get<2>(up);
+                camera.fov_deg = fov;
+
+                std::vector<rome::MeshInstance> items;
+                const std::size_t count = nb::len(instances);
+                items.reserve(count);
+                for (std::size_t i = 0; i < count; ++i) {
+                    nb::tuple t = nb::cast<nb::tuple>(instances[i]);
+                    rome::MeshInstance mi{};
+                    mi.mesh = nb::cast<std::uint64_t>(t[0]);
+                    nb::tuple p = nb::cast<nb::tuple>(t[1]);
+                    mi.position[0] = nb::cast<float>(p[0]);
+                    mi.position[1] = nb::cast<float>(p[1]);
+                    mi.position[2] = nb::cast<float>(p[2]);
+                    nb::tuple r = nb::cast<nb::tuple>(t[2]);
+                    mi.rotation[0] = nb::cast<float>(r[0]);
+                    mi.rotation[1] = nb::cast<float>(r[1]);
+                    mi.rotation[2] = nb::cast<float>(r[2]);
+                    mi.scale = nb::cast<float>(t[3]);
+                    items.push_back(mi);
+                }
+                return self.render_scene(items, camera);
+            },
+            "instances"_a, "cam_pos"_a = std::make_tuple(0.0F, 0.0F, -5.0F),
+            "cam_target"_a = std::make_tuple(0.0F, 0.0F, 0.0F),
+            "up"_a = std::make_tuple(0.0F, 1.0F, 0.0F), "fov"_a = 50.0F,
+            "Draw one frame of a scene. instances is a list of "
+            "(handle, (x,y,z), (rx,ry,rz), scale). Returns False once the window closes.")
+
         .def("close", &rome::App::close, "Ask the loop to stop after this frame.")
 
         .def_prop_ro("running", &rome::App::is_running)

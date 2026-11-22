@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <functional>
 
 namespace rome {
 class Window;
@@ -66,6 +67,10 @@ public:
     /// that in-flight command buffers might still reference.
     void wait_idle() const;
 
+    /// Records and runs a one-off command buffer on the graphics queue, blocking
+    /// until it completes. Used for GPU uploads (staging -> device-local copies).
+    void immediate_submit(const std::function<void(VkCommandBuffer)>& record) const;
+
 private:
     void destroy() noexcept;
 
@@ -76,6 +81,10 @@ private:
     std::uint32_t graphics_queue_family_ = 0;
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkPhysicalDeviceProperties device_properties_{};
+
+    // Dedicated pool + fence for immediate_submit (one-off uploads).
+    VkCommandPool transfer_pool_ = VK_NULL_HANDLE;
+    VkFence transfer_fence_ = VK_NULL_HANDLE;
 };
 
 }  // namespace rome::gfx

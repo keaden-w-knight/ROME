@@ -34,6 +34,8 @@ rome_add_shaders(rome_core
     SHADERS
         "${PROJECT_SOURCE_DIR}/shaders/triangle.vert"
         "${PROJECT_SOURCE_DIR}/shaders/triangle.frag"
+        "${PROJECT_SOURCE_DIR}/shaders/mesh.vert"
+        "${PROJECT_SOURCE_DIR}/shaders/mesh.frag"
 )
 
 # SDL3 is built as a DLL, so it has to sit next to anything that loads it.

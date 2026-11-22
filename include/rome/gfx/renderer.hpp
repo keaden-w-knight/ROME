@@ -1,9 +1,12 @@
 #pragma once
 
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <unordered_map>
 #include <vector>
 
 #include "rome/types.hpp"
@@ -12,6 +15,15 @@ namespace rome::gfx {
 
 class Context;
 class Swapchain;
+
+/// Vertex + index buffers for one uploaded mesh, device-local.
+struct GpuMesh {
+    VkBuffer vertex_buffer = VK_NULL_HANDLE;
+    VmaAllocation vertex_alloc = VK_NULL_HANDLE;
+    VkBuffer index_buffer = VK_NULL_HANDLE;
+    VmaAllocation index_alloc = VK_NULL_HANDLE;
+    std::uint32_t index_count = 0;
+};
 
 /// Records and submits one frame at a time.
 ///
@@ -31,12 +43,25 @@ public:
     Renderer(Renderer&&) = delete;
     Renderer& operator=(Renderer&&) = delete;
 
-    /// Draws and presents one frame. Returns false if the swapchain went out
-    /// of date and was rebuilt, meaning this frame produced no image.
+    /// Draws and presents one frame (the clear-only / triangle path). Returns
+    /// false if the swapchain went out of date and was rebuilt.
     bool draw(Color clear_color, Extent2D window_extent);
 
-    /// Rebuilds the swapchain at the given size. Safe to call with an empty
-    /// extent (minimised), in which case it does nothing.
+    /// Uploads a mesh to the GPU and returns a handle for drawing it. Positions
+    /// and normals are flat xyz triples (same vertex count); indices are a
+    /// triangle list.
+    std::uint64_t upload_mesh(const std::vector<float>& positions,
+                              const std::vector<float>& normals,
+                              const std::vector<std::uint32_t>& indices);
+
+    /// Draws and presents one frame of a scene: each instance's mesh, lit,
+    /// z-buffered, seen through the camera. Returns false if the swapchain was
+    /// rebuilt this frame.
+    bool draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
+                    const std::vector<MeshInstance>& instances);
+
+    /// Rebuilds the swapchain (and depth buffer) at the given size. Safe to call
+    /// with an empty extent (minimised), in which case it does nothing.
     void on_resize(Extent2D window_extent);
 
 private:
@@ -51,7 +76,20 @@ private:
     void create_present_semaphores();
     void destroy_present_semaphores();
     void create_pipeline();
+    void create_mesh_pipeline();
+    void create_depth_resources(Extent2D extent);
+    void destroy_depth_resources();
+    void destroy_meshes();
+
     void record(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color) const;
+    void record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
+                      const CameraParams& camera,
+                      const std::vector<MeshInstance>& instances) const;
+
+    // The acquire / submit / present scaffolding, shared by both draw paths. The
+    // record callback fills the command buffer for the acquired image.
+    bool submit_and_present(Extent2D window_extent,
+                            const std::function<void(VkCommandBuffer, std::uint32_t)>& record_fn);
 
     Context& context_;
     Swapchain& swapchain_;
@@ -66,6 +104,17 @@ private:
 
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+
+    VkPipelineLayout mesh_layout_ = VK_NULL_HANDLE;
+    VkPipeline mesh_pipeline_ = VK_NULL_HANDLE;
+
+    VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
+    VkImage depth_image_ = VK_NULL_HANDLE;
+    VmaAllocation depth_alloc_ = VK_NULL_HANDLE;
+    VkImageView depth_view_ = VK_NULL_HANDLE;
+
+    std::unordered_map<std::uint64_t, GpuMesh> meshes_;
+    std::uint64_t next_mesh_id_ = 1;
 };
 
 }  // namespace rome::gfx

@@ -1,8 +1,13 @@
 #include "rome/gfx/renderer.hpp"
 
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <vector>
 
 #include "rome/error.hpp"
 #include "rome/gfx/context.hpp"
@@ -19,8 +24,20 @@ constexpr std::uint32_t kTriangleVertSpv[] =
 constexpr std::uint32_t kTriangleFragSpv[] =
 #include "triangle.frag.h"
     ;
+constexpr std::uint32_t kMeshVertSpv[] =
+#include "mesh.vert.h"
+    ;
+constexpr std::uint32_t kMeshFragSpv[] =
+#include "mesh.frag.h"
+    ;
 
 constexpr std::uint64_t kNoTimeout = std::numeric_limits<std::uint64_t>::max();
+
+// Matches the push_constant block in mesh.vert (128 bytes, the guaranteed min).
+struct MeshPush {
+    glm::mat4 mvp;
+    glm::mat4 model;
+};
 
 VkShaderModule create_shader_module(VkDevice device, const std::uint32_t* code,
                                     std::size_t size_bytes) {
@@ -35,8 +52,9 @@ VkShaderModule create_shader_module(VkDevice device, const std::uint32_t* code,
 }
 
 /// A synchronization2 image barrier. Broad stage masks are acceptable here:
-/// this runs twice per frame on the swapchain image, not in a hot loop.
-void transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to) {
+/// this runs a few times per frame on an attachment, not in a hot loop.
+void transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to,
+                      VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
     VkImageMemoryBarrier2 barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -48,7 +66,7 @@ void transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout from, Vk
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.aspectMask = aspect;
     barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
     barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
 
@@ -66,7 +84,9 @@ Renderer::Renderer(Context& context, Swapchain& swapchain)
     : context_(context), swapchain_(swapchain) {
     create_frame_data();
     create_present_semaphores();
+    create_depth_resources(swapchain_.extent());
     create_pipeline();
+    create_mesh_pipeline();
 }
 
 Renderer::~Renderer() {
@@ -74,6 +94,15 @@ Renderer::~Renderer() {
 
     const VkDevice device = context_.device();
 
+    destroy_meshes();
+    destroy_depth_resources();
+
+    if (mesh_pipeline_ != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, mesh_pipeline_, nullptr);
+    }
+    if (mesh_layout_ != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, mesh_layout_, nullptr);
+    }
     if (pipeline_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, pipeline_, nullptr);
     }
@@ -147,6 +176,67 @@ void Renderer::destroy_present_semaphores() {
     render_finished_.clear();
 }
 
+void Renderer::create_depth_resources(Extent2D extent) {
+    destroy_depth_resources();
+    if (extent.is_empty()) {
+        return;
+    }
+
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = depth_format_;
+    image_info.extent = VkExtent3D{extent.width, extent.height, 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo alloc_info{};
+    alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+    alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    ROME_VK_CHECK(vmaCreateImage(context_.allocator(), &image_info, &alloc_info, &depth_image_,
+                                 &depth_alloc_, nullptr));
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = depth_image_;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = depth_format_;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    ROME_VK_CHECK(vkCreateImageView(context_.device(), &view_info, nullptr, &depth_view_));
+}
+
+void Renderer::destroy_depth_resources() {
+    const VkDevice device = context_.device();
+    if (depth_view_ != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, depth_view_, nullptr);
+        depth_view_ = VK_NULL_HANDLE;
+    }
+    if (depth_image_ != VK_NULL_HANDLE) {
+        vmaDestroyImage(context_.allocator(), depth_image_, depth_alloc_);
+        depth_image_ = VK_NULL_HANDLE;
+        depth_alloc_ = VK_NULL_HANDLE;
+    }
+}
+
+void Renderer::destroy_meshes() {
+    const VmaAllocator allocator = context_.allocator();
+    for (auto& [id, mesh] : meshes_) {
+        if (mesh.vertex_buffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, mesh.vertex_buffer, mesh.vertex_alloc);
+        }
+        if (mesh.index_buffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, mesh.index_buffer, mesh.index_alloc);
+        }
+    }
+    meshes_.clear();
+}
+
 void Renderer::create_pipeline() {
     const VkDevice device = context_.device();
 
@@ -177,7 +267,6 @@ void Renderer::create_pipeline() {
     input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    // Viewport and scissor are dynamic so a resize needs no pipeline rebuild.
     VkPipelineViewportStateCreateInfo viewport_state{};
     viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewport_state.viewportCount = 1;
@@ -212,8 +301,6 @@ void Renderer::create_pipeline() {
     dynamic_state.dynamicStateCount = static_cast<std::uint32_t>(kDynamicStates.size());
     dynamic_state.pDynamicStates = kDynamicStates.data();
 
-    // Dynamic rendering: attachment formats are declared here instead of in a
-    // VkRenderPass, and there is no VkFramebuffer to build or resize.
     const VkFormat color_format = swapchain_.format();
     VkPipelineRenderingCreateInfo rendering_info{};
     rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -238,13 +325,219 @@ void Renderer::create_pipeline() {
     const VkResult result =
         vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline_);
 
-    // The modules are only needed while the pipeline is being created.
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
 
     if (result != VK_SUCCESS) {
         detail::throw_vk(result, "vkCreateGraphicsPipelines", __FILE__, __LINE__);
     }
+}
+
+void Renderer::create_mesh_pipeline() {
+    const VkDevice device = context_.device();
+
+    VkPushConstantRange push_range{};
+    push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    push_range.offset = 0;
+    push_range.size = sizeof(MeshPush);
+
+    VkPipelineLayoutCreateInfo layout_info{};
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &push_range;
+    ROME_VK_CHECK(vkCreatePipelineLayout(device, &layout_info, nullptr, &mesh_layout_));
+
+    const VkShaderModule vert = create_shader_module(device, kMeshVertSpv, sizeof(kMeshVertSpv));
+    const VkShaderModule frag = create_shader_module(device, kMeshFragSpv, sizeof(kMeshFragSpv));
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    // Interleaved vertex: vec3 position, vec3 normal.
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = 6 * sizeof(float);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::array<VkVertexInputAttributeDescription, 2> attributes{};
+    attributes[0].location = 0;
+    attributes[0].binding = 0;
+    attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributes[0].offset = 0;
+    attributes[1].location = 1;
+    attributes[1].binding = 0;
+    attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributes[1].offset = 3 * sizeof(float);
+
+    VkPipelineVertexInputStateCreateInfo vertex_input{};
+    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input.vertexBindingDescriptionCount = 1;
+    vertex_input.pVertexBindingDescriptions = &binding;
+    vertex_input.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size());
+    vertex_input.pVertexAttributeDescriptions = attributes.data();
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+    input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    // Cull nothing for Phase 1: correct regardless of winding, and the depth
+    // test resolves what shows. Back-face culling is a later optimisation.
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0F;
+
+    VkPipelineMultisampleStateCreateInfo multisample{};
+    multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.minSampleShading = 1.0F;
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+    depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil.depthTestEnable = VK_TRUE;
+    depth_stencil.depthWriteEnable = VK_TRUE;
+    depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depth_stencil.minDepthBounds = 0.0F;
+    depth_stencil.maxDepthBounds = 1.0F;
+
+    VkPipelineColorBlendAttachmentState blend_attachment{};
+    blend_attachment.blendEnable = VK_FALSE;
+    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo color_blend{};
+    color_blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blend.attachmentCount = 1;
+    color_blend.pAttachments = &blend_attachment;
+
+    constexpr std::array<VkDynamicState, 2> kDynamicStates{VK_DYNAMIC_STATE_VIEWPORT,
+                                                           VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_state{};
+    dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state.dynamicStateCount = static_cast<std::uint32_t>(kDynamicStates.size());
+    dynamic_state.pDynamicStates = kDynamicStates.data();
+
+    const VkFormat color_format = swapchain_.format();
+    VkPipelineRenderingCreateInfo rendering_info{};
+    rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering_info.colorAttachmentCount = 1;
+    rendering_info.pColorAttachmentFormats = &color_format;
+    rendering_info.depthAttachmentFormat = depth_format_;
+
+    VkGraphicsPipelineCreateInfo pipeline_info{};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.pNext = &rendering_info;
+    pipeline_info.stageCount = static_cast<std::uint32_t>(stages.size());
+    pipeline_info.pStages = stages.data();
+    pipeline_info.pVertexInputState = &vertex_input;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState = &viewport_state;
+    pipeline_info.pRasterizationState = &rasterizer;
+    pipeline_info.pMultisampleState = &multisample;
+    pipeline_info.pDepthStencilState = &depth_stencil;
+    pipeline_info.pColorBlendState = &color_blend;
+    pipeline_info.pDynamicState = &dynamic_state;
+    pipeline_info.layout = mesh_layout_;
+    pipeline_info.renderPass = VK_NULL_HANDLE;
+
+    const VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info,
+                                                      nullptr, &mesh_pipeline_);
+
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
+
+    if (result != VK_SUCCESS) {
+        detail::throw_vk(result, "vkCreateGraphicsPipelines(mesh)", __FILE__, __LINE__);
+    }
+}
+
+std::uint64_t Renderer::upload_mesh(const std::vector<float>& positions,
+                                    const std::vector<float>& normals,
+                                    const std::vector<std::uint32_t>& indices) {
+    const std::size_t vertex_count = positions.size() / 3;
+    if (vertex_count == 0 || normals.size() != positions.size() || indices.empty()) {
+        throw Error{"upload_mesh: need matching non-empty positions/normals and indices"};
+    }
+
+    // Interleave into [px py pz nx ny nz] per vertex.
+    std::vector<float> interleaved(vertex_count * 6);
+    for (std::size_t i = 0; i < vertex_count; ++i) {
+        interleaved[i * 6 + 0] = positions[i * 3 + 0];
+        interleaved[i * 6 + 1] = positions[i * 3 + 1];
+        interleaved[i * 6 + 2] = positions[i * 3 + 2];
+        interleaved[i * 6 + 3] = normals[i * 3 + 0];
+        interleaved[i * 6 + 4] = normals[i * 3 + 1];
+        interleaved[i * 6 + 5] = normals[i * 3 + 2];
+    }
+
+    const VmaAllocator allocator = context_.allocator();
+    const VkDeviceSize vertex_bytes = interleaved.size() * sizeof(float);
+    const VkDeviceSize index_bytes = indices.size() * sizeof(std::uint32_t);
+
+    GpuMesh mesh{};
+    mesh.index_count = static_cast<std::uint32_t>(indices.size());
+
+    auto make_device_buffer = [&](VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buffer,
+                                  VmaAllocation& alloc) {
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = size;
+        info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo alloc_info{};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+        ROME_VK_CHECK(vmaCreateBuffer(allocator, &info, &alloc_info, &buffer, &alloc, nullptr));
+    };
+
+    make_device_buffer(vertex_bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.vertex_buffer,
+                       mesh.vertex_alloc);
+    make_device_buffer(index_bytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.index_buffer,
+                       mesh.index_alloc);
+
+    auto upload = [&](const void* data, VkDeviceSize size, VkBuffer dst) {
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = size;
+        info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo alloc_info{};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                           VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation staging_alloc = VK_NULL_HANDLE;
+        VmaAllocationInfo staging_info{};
+        ROME_VK_CHECK(
+            vmaCreateBuffer(allocator, &info, &alloc_info, &staging, &staging_alloc, &staging_info));
+        std::memcpy(staging_info.pMappedData, data, static_cast<std::size_t>(size));
+        context_.immediate_submit([&](VkCommandBuffer cmd) {
+            VkBufferCopy copy{};
+            copy.size = size;
+            vkCmdCopyBuffer(cmd, staging, dst, 1, &copy);
+        });
+        vmaDestroyBuffer(allocator, staging, staging_alloc);
+    };
+
+    upload(interleaved.data(), vertex_bytes, mesh.vertex_buffer);
+    upload(indices.data(), index_bytes, mesh.index_buffer);
+
+    const std::uint64_t id = next_mesh_id_++;
+    meshes_.emplace(id, mesh);
+    return id;
 }
 
 void Renderer::record(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color) const {
@@ -301,11 +594,117 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t image_index, Color clea
     ROME_VK_CHECK(vkEndCommandBuffer(cmd));
 }
 
+void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
+                            const CameraParams& camera,
+                            const std::vector<MeshInstance>& instances) const {
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    ROME_VK_CHECK(vkBeginCommandBuffer(cmd, &begin_info));
+
+    const VkImage image = swapchain_.images()[image_index];
+    const Extent2D extent = swapchain_.extent();
+
+    transition_image(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    transition_image(cmd, depth_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    VkRenderingAttachmentInfo color_attachment{};
+    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color_attachment.imageView = swapchain_.image_views()[image_index];
+    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color_attachment.clearValue.color.float32[0] = clear_color.r;
+    color_attachment.clearValue.color.float32[1] = clear_color.g;
+    color_attachment.clearValue.color.float32[2] = clear_color.b;
+    color_attachment.clearValue.color.float32[3] = clear_color.a;
+
+    VkRenderingAttachmentInfo depth_attachment{};
+    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth_attachment.imageView = depth_view_;
+    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth_attachment.clearValue.depthStencil.depth = 1.0F;
+
+    VkRenderingInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering.renderArea.extent = VkExtent2D{extent.width, extent.height};
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color_attachment;
+    rendering.pDepthAttachment = &depth_attachment;
+
+    vkCmdBeginRendering(cmd, &rendering);
+
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.minDepth = 0.0F;
+    viewport.maxDepth = 1.0F;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.extent = VkExtent2D{extent.width, extent.height};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipeline_);
+
+    const glm::vec3 eye{camera.position[0], camera.position[1], camera.position[2]};
+    const glm::vec3 center{camera.target[0], camera.target[1], camera.target[2]};
+    const glm::vec3 up{camera.up[0], camera.up[1], camera.up[2]};
+    const float aspect =
+        extent.height != 0 ? static_cast<float>(extent.width) / static_cast<float>(extent.height)
+                           : 1.0F;
+    const glm::mat4 view = glm::lookAt(eye, center, up);
+    glm::mat4 proj = glm::perspective(glm::radians(camera.fov_deg), aspect, 0.1F, 100.0F);
+    proj[1][1] *= -1.0F;  // Vulkan clip space has +Y down relative to GLM's default
+    const glm::mat4 view_proj = proj * view;
+
+    for (const MeshInstance& inst : instances) {
+        const auto it = meshes_.find(inst.mesh);
+        if (it == meshes_.end()) {
+            continue;
+        }
+
+        // translate * Rz * Rx * Ry * scale, matching the framework's transform.
+        glm::mat4 model =
+            glm::translate(glm::mat4(1.0F),
+                           glm::vec3(inst.position[0], inst.position[1], inst.position[2]));
+        model = model * glm::rotate(glm::mat4(1.0F), inst.rotation[2], glm::vec3(0, 0, 1));
+        model = model * glm::rotate(glm::mat4(1.0F), inst.rotation[0], glm::vec3(1, 0, 0));
+        model = model * glm::rotate(glm::mat4(1.0F), inst.rotation[1], glm::vec3(0, 1, 0));
+        model = model * glm::scale(glm::mat4(1.0F), glm::vec3(inst.scale));
+
+        MeshPush push{};
+        push.mvp = view_proj * model;
+        push.model = model;
+        vkCmdPushConstants(cmd, mesh_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPush),
+                           &push);
+
+        const VkBuffer vertex_buffer = it->second.vertex_buffer;
+        const VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, it->second.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, it->second.index_count, 1, 0, 0, 0);
+    }
+
+    vkCmdEndRendering(cmd);
+
+    transition_image(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+    ROME_VK_CHECK(vkEndCommandBuffer(cmd));
+}
+
 void Renderer::on_resize(Extent2D window_extent) {
     if (window_extent.is_empty()) {
         return;  // minimised: nothing valid to size a swapchain against
     }
     swapchain_.recreate(window_extent);
+    create_depth_resources(swapchain_.extent());
 
     // The image count can change across a rebuild, so the per-image
     // presentation semaphores are rebuilt alongside it.
@@ -313,7 +712,8 @@ void Renderer::on_resize(Extent2D window_extent) {
     create_present_semaphores();
 }
 
-bool Renderer::draw(Color clear_color, Extent2D window_extent) {
+bool Renderer::submit_and_present(
+    Extent2D window_extent, const std::function<void(VkCommandBuffer, std::uint32_t)>& record_fn) {
     const VkDevice device = context_.device();
     FrameData& frame = frames_[frame_index_];
 
@@ -336,7 +736,7 @@ bool Renderer::draw(Color clear_color, Extent2D window_extent) {
     ROME_VK_CHECK(vkResetFences(device, 1, &frame.in_flight));
     ROME_VK_CHECK(vkResetCommandPool(device, frame.command_pool, 0));
 
-    record(frame.command_buffer, image_index, clear_color);
+    record_fn(frame.command_buffer, image_index);
 
     VkCommandBufferSubmitInfo cmd_info{};
     cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
@@ -384,6 +784,19 @@ bool Renderer::draw(Color clear_color, Extent2D window_extent) {
         detail::throw_vk(presented, "vkQueuePresentKHR", __FILE__, __LINE__);
     }
     return true;
+}
+
+bool Renderer::draw(Color clear_color, Extent2D window_extent) {
+    return submit_and_present(window_extent, [&](VkCommandBuffer cmd, std::uint32_t image_index) {
+        record(cmd, image_index, clear_color);
+    });
+}
+
+bool Renderer::draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
+                          const std::vector<MeshInstance>& instances) {
+    return submit_and_present(window_extent, [&](VkCommandBuffer cmd, std::uint32_t image_index) {
+        record_scene(cmd, image_index, clear_color, camera, instances);
+    });
 }
 
 }  // namespace rome::gfx
