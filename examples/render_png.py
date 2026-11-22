@@ -16,10 +16,12 @@ def main() -> None:
     width, height = 960, 600
 
     scene = rome.Scene()
-    scene.add(rome.Mesh.sphere(), position=(-2.6, 0.0, 0.0), scale=0.9)
-    scene.add(rome.Mesh.sphere(), position=(0.0, 0.0, 0.0), scale=1.3)
-    scene.add(rome.Mesh.cube(), position=(2.6, 0.3, 0.0), rotation=(0.4, 0.7, 0.0), scale=0.9)
-    scene.add(rome.Mesh.sphere(16, 10), position=(0.0, -1.7, 2.0), scale=0.6)
+    scene.add(rome.Mesh.sphere(), position=(-2.6, 0.0, 0.0), scale=0.9, color=(0.85, 0.35, 0.35))
+    scene.add(rome.Mesh.sphere(), position=(0.0, 0.0, 0.0), scale=1.3, color=(0.4, 0.75, 0.45))
+    scene.add(rome.Mesh.cube(), position=(2.6, 0.3, 0.0), rotation=(0.4, 0.7, 0.0), scale=0.9,
+              color=(0.45, 0.55, 0.9))
+    scene.add(rome.Mesh.sphere(16, 10), position=(0.0, -1.7, 2.0), scale=0.6,
+              color=(0.9, 0.8, 0.35))
 
     camera = rome.Camera(position=(2.5, 2.0, -7.0), target=(0.0, 0.0, 0.0), fov=55.0)
 

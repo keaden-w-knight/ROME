@@ -61,7 +61,7 @@ class VulkanBackend(Backend):
 
     def render(self, scene: Scene, camera: Camera) -> None:
         instances = [
-            (self._realize(node.mesh), node.position, node.rotation, node.scale)
+            (self._realize(node.mesh), node.position, node.rotation, node.scale, node.color)
             for node in scene.nodes
         ]
         self._running = self._app.render_scene(
@@ -74,7 +74,7 @@ class VulkanBackend(Backend):
 
     def render_image(self, scene: Scene, camera: Camera, width: int, height: int) -> bytes:
         instances = [
-            (self._realize(node.mesh), node.position, node.rotation, node.scale)
+            (self._realize(node.mesh), node.position, node.rotation, node.scale, node.color)
             for node in scene.nodes
         ]
         return self._app.render_to_image(

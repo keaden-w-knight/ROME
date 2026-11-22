@@ -71,6 +71,12 @@ std::vector<rome::MeshInstance> parse_instances(const nb::list& instances) {
         mi.rotation[1] = nb::cast<float>(r[1]);
         mi.rotation[2] = nb::cast<float>(r[2]);
         mi.scale = nb::cast<float>(entry[3]);
+        if (nb::len(entry) >= 5) {  // optional (r, g, b) colour
+            nb::tuple c = nb::cast<nb::tuple>(entry[4]);
+            mi.color[0] = nb::cast<float>(c[0]);
+            mi.color[1] = nb::cast<float>(c[1]);
+            mi.color[2] = nb::cast<float>(c[2]);
+        }
         items.push_back(mi);
     }
     return items;

@@ -44,6 +44,7 @@ class Node:
     position: Vec3 = (0.0, 0.0, 0.0)
     rotation: Vec3 = (0.0, 0.0, 0.0)  # Euler radians
     scale: float = 1.0
+    color: Vec3 = (0.62, 0.68, 0.82)  # linear RGB 0..1 (GPU backends; ASCII ignores it)
     name: str | None = None
 
 
@@ -58,9 +59,12 @@ class Scene:
         position: Vec3 = (0.0, 0.0, 0.0),
         rotation: Vec3 = (0.0, 0.0, 0.0),
         scale: float = 1.0,
+        color: Vec3 = (0.62, 0.68, 0.82),
         name: str | None = None,
     ) -> Node:
-        node = Node(mesh=mesh, position=position, rotation=rotation, scale=scale, name=name)
+        node = Node(
+            mesh=mesh, position=position, rotation=rotation, scale=scale, color=color, name=name
+        )
         self.nodes.append(node)
         return node
 

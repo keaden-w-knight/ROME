@@ -33,10 +33,13 @@ constexpr std::uint32_t kMeshFragSpv[] =
 
 constexpr std::uint64_t kNoTimeout = std::numeric_limits<std::uint64_t>::max();
 
-// Matches the push_constant block in mesh.vert (128 bytes, the guaranteed min).
+// Matches the push_constant block in mesh.vert. 144 bytes; within the 256-byte
+// limit of the target GPUs (the Vulkan-guaranteed minimum is 128 — a GPU capped
+// there would need this moved into a UBO, which the lighting phase will add).
 struct MeshPush {
     glm::mat4 mvp;
     glm::mat4 model;
+    glm::vec4 color;
 };
 
 VkShaderModule create_shader_module(VkDevice device, const std::uint32_t* code,
@@ -693,6 +696,7 @@ void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::
         MeshPush push{};
         push.mvp = view_proj * model;
         push.model = model;
+        push.color = glm::vec4(inst.color[0], inst.color[1], inst.color[2], 1.0F);
         vkCmdPushConstants(cmd, mesh_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPush),
                            &push);
 

@@ -35,12 +35,14 @@ struct CameraParams {
 };
 
 /// One placed mesh for a frame: a mesh handle (from App::upload_mesh) plus its
-/// transform. Rotation is Euler radians, applied Y -> X -> Z; scale is uniform.
+/// transform and base colour. Rotation is Euler radians, applied Y -> X -> Z;
+/// scale is uniform; colour is linear RGB in 0..1.
 struct MeshInstance {
     std::uint64_t mesh = 0;
     float position[3]{0.0F, 0.0F, 0.0F};
     float rotation[3]{0.0F, 0.0F, 0.0F};
     float scale = 1.0F;
+    float color[3]{0.62F, 0.68F, 0.82F};
 };
 
 }  // namespace rome
