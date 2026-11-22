@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "rome"
 version = "0.1.0"
-description = "A Vulkan-backed 3D viewport you can drive from Python"
+description = "A renderer-agnostic 3D framework you drive from Python (Vulkan or ASCII backends)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -19,8 +19,15 @@ classifiers = [
     "Topic :: Multimedia :: Graphics :: 3D Rendering",
 ]
 
+[project.optional-dependencies]
+# The terminal (ASCII) backend renders through the 3-ASCII engine.
+ascii = ["three-ascii"]
+
+[project.scripts]
+rome = "rome.cli:main"
+
 [project.urls]
-Homepage = "https://github.com/Keaden/ROME"
+Homepage = "https://github.com/keaden-w-knight/ROME"
 
 [tool.scikit-build]
 minimum-version = "0.10"
@@ -33,8 +40,9 @@ cmake.define.ROME_BUILD_EXAMPLES = "OFF"
 cmake.define.ROME_BUILD_TESTS = "OFF"
 cmake.define.ROME_BUILD_PYTHON = "ON"
 
-# python/CMakeLists.txt installs the package contents into rome/ directly.
-wheel.packages = []
+# The pure-Python framework ships from python/rome; CMake adds the compiled
+# _rome extension and SDL3.dll into the same package for the vulkan backend.
+wheel.packages = ["python/rome"]
 
 sdist.exclude = ["build", ".vscode", "*.pyd", "*.lib", "*.exe"]
 

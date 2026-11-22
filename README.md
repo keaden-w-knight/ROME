@@ -1,31 +1,63 @@
 # ROME
 
-A Vulkan-backed 3D viewport with Python bindings — aiming at the overlap
-between pygame (own your loop, handle your own events, stay out of the way)
-and Babylon.js (scenes, meshes, cameras, materials).
+A **renderer-agnostic 3D framework** you drive from Python, plus a scaffolder
+that generates game projects. You build a scene and own your loop; a **backend**
+draws it — the GPU (**Vulkan**) by default, or the terminal (**ASCII**, via
+[3-ASCII](https://github.com/keaden-w-knight/3-ASCII)). The same game runs on
+either, and new backends can ship as plugins.
 
 ```python
 import rome
 
-app = rome.App(title="Viewport", clear_color=(0.05, 0.05, 0.08))
-print(app.gpu_name)          # NVIDIA T1200 Laptop GPU
+scene = rome.Scene()
+scene.add(rome.Mesh.sphere(), position=(0, 0, 0))
+cam = rome.Camera.orbit(yaw=0.6, pitch=0.4, dist=6)
 
-while app.tick():            # your loop, your frame
-    ...
+app = rome.App(scene=scene, camera=cam, backend="ascii")   # or "vulkan"
+app.run(lambda a: a.close() if a.input.down("escape") else None)
 ```
 
-Current status: **the vertical slice is working end to end.** A window, a
-Vulkan 1.3 device, a swapchain and a rendered triangle, reachable from both
-C++ and Python. The scene graph is not built yet — see [Roadmap](#roadmap).
+Start a new project with the scaffolder:
+
+```bash
+rome new mygame            # prompts for the rest; --backend vulkan|ascii
+cd mygame && python main.py
+```
+
+It generates `main.py`, a `game/` package (scene + player control), `assets/`,
+and `config/game.toml` — editable starter code that owns the gameplay and calls
+ROME to render.
+
+Aimed at the overlap between pygame (own your loop, stay out of the way) and
+Babylon.js (scenes, meshes, cameras).
+
+## Status
+
+- **Framework, ASCII backend, and scaffolder: working.** `import rome` is pure
+  Python (no GPU needed); the ASCII backend renders full scenes today; `rome new`
+  scaffolds a runnable project.
+- **Vulkan backend: window + device + cleared frame.** It opens a real Vulkan
+  1.3 window and runs the loop, but **does not draw meshes yet** — the native
+  scene-graph, camera, and mesh rendering are on the [Roadmap](#roadmap). It is
+  the *default* backend; use `backend="ascii"` to see scenes while that lands.
 
 ## Layout
 
 ```
-include/rome/     Public headers (App, Window, types) — the C++ interface
+python/rome/      The framework (pure Python)
+  scene.py        Scene, Node, Mesh — the backend-agnostic model
+  camera.py       Free look-at camera
+  input.py        InputState, surfaced uniformly
+  app.py          App: the loop (tick/draw/run), owns the backend
+  backends/       Backend interface + registry (plugin-discoverable)
+    vulkan.py     Default: wraps the native _rome extension
+    ascii.py      Renders scenes via the three_ascii engine
+  cli.py          `rome new` scaffolder
+python/bindings.cpp  nanobind module (_rome) — the Vulkan backend's native side
+include/rome/     Public C++ headers (App, Window, types)
   gfx/            Vulkan internals: context, swapchain, renderer
-src/rome/         Implementations
+src/rome/         C++ implementations
 shaders/          GLSL, compiled to SPIR-V and embedded into the binary
-python/           nanobind module (_rome) + the `rome` Python package
 examples/         hello_triangle in both C++ and Python
 tests/            CTest suite (no GPU or window required)
 cmake/            Dependency fetching and the shader build rule

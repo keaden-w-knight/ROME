@@ -1,35 +1,55 @@
-"""ROME - a Vulkan-backed 3D viewport you can drive from Python.
+"""ROME — a renderer-agnostic 3D framework you drive from Python.
 
-The native extension does the rendering; this module is the friendly surface
-over it. Two loop styles are supported, mirroring how pygame and a scene
-library each expect to be used:
+Build a ``Scene``, point a ``Camera``, pick a backend (Vulkan by default, ASCII
+for the terminal), and run your loop. Rendering lives behind a backend interface,
+so the same game runs on the GPU or in a terminal — or on a backend that ships as
+its own plugin.
 
-    # You own the loop (pygame style)
     import rome
 
-    app = rome.App(title="Viewport")
-    while app.tick():
-        ...                     # your per-frame work
+    scene = rome.Scene()
+    scene.add(rome.Mesh.sphere(), position=(0, 0, 0))
+    cam = rome.Camera.orbit(yaw=0.6, pitch=0.4, dist=6)
 
-    # ROME owns the loop
-    with rome.App() as app:
-        app.run()
+    app = rome.App(scene=scene, camera=cam, backend="ascii")
+    app.run(lambda app: app.close() if app.input.down("escape") else None)
+
+Create a new project with the scaffolder:  ``rome new mygame``
 """
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
+from .app import App
+from .backends import (
+    DEFAULT_BACKEND,
+    available_backends,
+    create_backend,
+    register_backend,
+)
+from .camera import Camera
+from .input import InputState
+from .scene import Mesh, Node, Scene
 
-# The extension links SDL3 as a DLL that sits beside it in the package. Since
-# Python 3.8 Windows no longer searches PATH for a module's dependencies, so
-# the directory has to be registered explicitly before the import.
-if sys.platform == "win32":  # pragma: no cover - platform specific
-    _package_dir = Path(__file__).parent
-    if hasattr(os, "add_dll_directory") and _package_dir.is_dir():
-        os.add_dll_directory(str(_package_dir))
+try:  # version comes from installed package metadata when available
+    from importlib.metadata import PackageNotFoundError, version
 
-from ._rome import App, RomeError, __version__  # noqa: E402
+    try:
+        __version__ = version("rome")
+    except PackageNotFoundError:
+        __version__ = "0.1.0"
+except Exception:  # pragma: no cover
+    __version__ = "0.1.0"
 
-__all__ = ["App", "RomeError", "__version__"]
+__all__ = [
+    "App",
+    "Camera",
+    "Scene",
+    "Node",
+    "Mesh",
+    "InputState",
+    "available_backends",
+    "create_backend",
+    "register_backend",
+    "DEFAULT_BACKEND",
+    "__version__",
+]

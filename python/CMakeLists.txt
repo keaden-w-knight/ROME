@@ -41,10 +41,9 @@ add_custom_command(TARGET _rome POST_BUILD
     VERBATIM
 )
 
-# Wheel layout, used when scikit-build-core drives the build.
+# Wheel layout, used when scikit-build-core drives the build. The .py sources
+# (the whole rome package, including __init__.py and py.typed) are added by
+# scikit-build's wheel.packages; CMake contributes only the native pieces into
+# the same rome/ package.
 install(TARGETS _rome LIBRARY DESTINATION rome RUNTIME DESTINATION rome)
-install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/rome/__init__.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/rome/py.typed"
-        DESTINATION rome)
 install(FILES "$<TARGET_FILE:SDL3::SDL3>" DESTINATION rome)

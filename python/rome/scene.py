@@ -1,0 +1,74 @@
+"""The scene model: what to draw, independent of how it's drawn.
+
+A ``Scene`` is a backend-agnostic description — meshes placed by transform, plus
+a light. Each rendering backend (Vulkan, ASCII, …) turns this same description
+into its own native form, so one game's scene renders through any backend.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+Vec3 = tuple[float, float, float]
+
+
+@dataclass
+class Mesh:
+    """A backend-agnostic mesh *description*. A backend realises it into its own
+    native mesh (GPU buffers, ASCII triangles, …) and caches that by identity."""
+
+    kind: str  # "sphere" | "cube" | "obj"
+    path: str | None = None
+    segments: int = 32
+    rings: int = 20
+
+    @staticmethod
+    def sphere(segments: int = 32, rings: int = 20) -> "Mesh":
+        return Mesh(kind="sphere", segments=segments, rings=rings)
+
+    @staticmethod
+    def cube() -> "Mesh":
+        return Mesh(kind="cube")
+
+    @staticmethod
+    def load(path: str) -> "Mesh":
+        """A mesh from a regular 3D file on disk (OBJ today)."""
+        return Mesh(kind="obj", path=path)
+
+
+@dataclass
+class Node:
+    """One placed instance of a mesh in the world."""
+
+    mesh: Mesh
+    position: Vec3 = (0.0, 0.0, 0.0)
+    rotation: Vec3 = (0.0, 0.0, 0.0)  # Euler radians
+    scale: float = 1.0
+    name: str | None = None
+
+
+@dataclass
+class Scene:
+    nodes: list[Node] = field(default_factory=list)
+    light_direction: Vec3 = (-0.5, 0.8, -1.0)
+
+    def add(
+        self,
+        mesh: Mesh,
+        position: Vec3 = (0.0, 0.0, 0.0),
+        rotation: Vec3 = (0.0, 0.0, 0.0),
+        scale: float = 1.0,
+        name: str | None = None,
+    ) -> Node:
+        node = Node(mesh=mesh, position=position, rotation=rotation, scale=scale, name=name)
+        self.nodes.append(node)
+        return node
+
+    def remove(self, node: Node) -> None:
+        self.nodes.remove(node)
+
+    def clear(self) -> None:
+        self.nodes.clear()
+
+    def __len__(self) -> int:
+        return len(self.nodes)
