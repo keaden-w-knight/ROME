@@ -65,8 +65,10 @@ def sphere(segments: int = 32, rings: int = 20) -> Geometry:
         for s in range(segments):
             a = r * stride + s
             b = a + stride
-            tris.append((a, b, a + 1))
-            tris.append((a + 1, b, b + 1))
+            # Wound so the computed vertex normals point outward (CCW seen from
+            # outside), matching the cube and OBJ convention.
+            tris.append((a, a + 1, b))
+            tris.append((a + 1, b + 1, b))
     return _build(verts, tris)
 
 
