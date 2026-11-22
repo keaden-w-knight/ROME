@@ -31,6 +31,7 @@ class AsciiBackend(Backend):
         self._prev: frozenset[str] = frozenset()
         self._w = 100
         self._h = 44
+        self._color = "depth"  # glyph = fill/brightness, gray = depth (chosen look)
         self._closed = False
 
     def open(self, config: BackendConfig) -> None:
@@ -93,6 +94,7 @@ class AsciiBackend(Backend):
             cam_target=camera.target,
             up=camera.up,
             fov=camera.fov,
+            color=self._color,
             vt=True,
         )
         sys.stdout.write(frame)
