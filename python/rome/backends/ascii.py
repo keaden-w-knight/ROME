@@ -49,19 +49,23 @@ class AsciiBackend(Backend):
         sys.stdout.flush()
 
     def _realize(self, mesh: Mesh):
-        """Framework Mesh -> three_ascii.Mesh, cached by identity."""
+        """Framework Mesh -> three_ascii.Mesh, cached by identity. Geometry comes
+        from the shared `rome.geometry` module (same source the GPU backend uses),
+        so both backends draw identical meshes."""
         cached = self._cache.get(id(mesh))
         if cached is not None:
             return cached
-        ta = self._ta
+        from .. import geometry
+
         if mesh.kind == "sphere":
-            native = ta.Mesh.sphere(mesh.segments, mesh.rings)
+            geo = geometry.sphere(mesh.segments, mesh.rings)
         elif mesh.kind == "cube":
-            native = ta.Mesh.cube()
+            geo = geometry.cube()
         elif mesh.kind == "obj":
-            native = ta.Mesh.load(mesh.path)
+            geo = geometry.load_obj(mesh.path)
         else:
             raise ValueError(f"unknown mesh kind {mesh.kind!r}")
+        native = self._ta.Mesh.from_arrays(geo.positions, geo.normals, geo.indices)
         self._cache[id(mesh)] = native
         return native
 

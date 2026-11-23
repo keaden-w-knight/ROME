@@ -65,11 +65,15 @@ def sphere(segments: int = 32, rings: int = 20) -> Geometry:
         for s in range(segments):
             a = r * stride + s
             b = a + stride
-            # Wound so the computed vertex normals point outward (CCW seen from
-            # outside), matching the cube and OBJ convention.
+            # Wound so the normals point outward (CCW seen from outside), matching
+            # the cube and OBJ convention.
             tris.append((a, a + 1, b))
             tris.append((a + 1, b + 1, b))
-    return _build(verts, tris)
+    # Analytic normals: a centred sphere's normal is its normalized position.
+    # Exact, and identical for the duplicated seam/pole vertices, so there's no
+    # lighting crease where the longitude wraps (which averaged normals leave).
+    normals = [_normalized(v) for v in verts]
+    return _build(verts, tris, normals)
 
 
 def load_obj(path: str) -> Geometry:
@@ -119,6 +123,13 @@ def _build(
     for t in tris:
         indices.extend(t)
     return Geometry(positions=positions, normals=flat_normals, indices=indices)
+
+
+def _normalized(v: Vec3) -> Vec3:
+    length = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+    if length < 1e-6:
+        return (0.0, 0.0, 1.0)
+    return (v[0] / length, v[1] / length, v[2] / length)
 
 
 def _center_and_scale(verts: list[Vec3]) -> list[Vec3]:
