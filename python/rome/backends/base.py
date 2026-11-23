@@ -41,8 +41,9 @@ class Backend(ABC):
         """Current input for this frame."""
 
     @abstractmethod
-    def render(self, scene: Scene, camera: Camera) -> None:
-        """Draw one frame of `scene` from `camera`, and present it."""
+    def render(self, scene: Scene, camera: Camera, hud=None) -> None:
+        """Draw one frame of `scene` from `camera` (plus an optional HUD overlay),
+        and present it."""
 
     @abstractmethod
     def should_close(self) -> bool:
@@ -52,7 +53,8 @@ class Backend(ABC):
     def close(self) -> None:
         """Release everything."""
 
-    def render_image(self, scene: Scene, camera: Camera, width: int, height: int) -> bytes:
+    def render_image(self, scene: Scene, camera: Camera, width: int, height: int,
+                     hud=None) -> bytes:
         """Render the scene off-screen and return width*height*4 RGBA8 bytes.
         Optional: backends that cannot render off-screen raise."""
         raise NotImplementedError(f"the {self.name} backend has no off-screen render")

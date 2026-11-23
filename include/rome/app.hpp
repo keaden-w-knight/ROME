@@ -58,7 +58,8 @@ public:
     /// lit and depth-tested, seen through `camera`. Returns false once the window
     /// has been closed, so it reads as a while condition like tick().
     bool render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera,
-                      const std::vector<Light>& lights, const ShadingParams& shading);
+                      const std::vector<Light>& lights, const ShadingParams& shading,
+                      const std::vector<HudItem>& hud);
 
     /// Renders a scene to an off-screen image (no window needed) and returns its
     /// pixels as RGBA8, width*height*4 bytes, top row first.
@@ -66,7 +67,8 @@ public:
                                               const std::vector<MeshInstance>& instances,
                                               const CameraParams& camera,
                                               const std::vector<Light>& lights,
-                                              const ShadingParams& shading);
+                                              const ShadingParams& shading,
+                                              const std::vector<HudItem>& hud);
 
     /// Set the window title (e.g. an FPS readout).
     void set_title(const std::string& title) {

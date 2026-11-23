@@ -322,6 +322,17 @@ void Renderer::create_descriptors() {
         write.pBufferInfo = &buffer_info;
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
+
+    // The HUD slot is constant: a front "headlight" so overlay objects read
+    // clearly regardless of the scene's lighting.
+    auto* hud = static_cast<FrameUbo*>(frame_ubo_mapped_[kHudUboSlot]);
+    hud->eye = glm::vec4(0.0F, 0.0F, -3.0F, 0.35F);      // w = ambient
+    hud->material = glm::vec4(0.0F, 16.0F, 0.0F, 0.0F);  // no specular
+    hud->counts = glm::ivec4(1, 0, 0, 0);
+    hud->lights[0].position = glm::vec4(0.0F, 0.0F, 0.0F, 0.0F);  // type 0 = directional
+    hud->lights[0].direction = glm::vec4(glm::normalize(glm::vec3(0.3F, -0.4F, 1.0F)), 1.0F);
+    hud->lights[0].color = glm::vec4(1.0F, 1.0F, 1.0F, 1.0F);
+    hud->lights[0].cone = glm::vec4(1.0F, 1.0F, 0.0F, 0.0F);
 }
 
 void Renderer::destroy_descriptors() {
@@ -702,10 +713,52 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t image_index, Color clea
     ROME_VK_CHECK(vkEndCommandBuffer(cmd));
 }
 
+void Renderer::record_hud_draws(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height,
+                                const std::vector<HudItem>& hud) const {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_layout_, 0, 1,
+                            &frame_sets_[kHudUboSlot], 0, nullptr);
+
+    const float aspect =
+        height != 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
+
+    for (const HudItem& item : hud) {
+        const auto it = meshes_.find(item.mesh);
+        if (it == meshes_.end()) {
+            continue;
+        }
+
+        // Screen (0..1, top-left) -> clip NDC, built directly: place at
+        // (ndc_x, ndc_y), scale by size (x compensated for aspect so it stays
+        // square), z kept in a thin slice of [0,1] for the HUD's own depth sort.
+        const float ndc_x = item.x * 2.0F - 1.0F;
+        const float ndc_y = item.y * 2.0F - 1.0F;
+        glm::mat4 m = glm::translate(glm::mat4(1.0F), glm::vec3(ndc_x, ndc_y, 0.5F));
+        m = m * glm::rotate(glm::mat4(1.0F), item.rotation[2], glm::vec3(0, 0, 1));
+        m = m * glm::rotate(glm::mat4(1.0F), item.rotation[0], glm::vec3(1, 0, 0));
+        m = m * glm::rotate(glm::mat4(1.0F), item.rotation[1], glm::vec3(0, 1, 0));
+        m = glm::scale(m, glm::vec3(item.size / aspect, item.size, item.size * 0.25F));
+
+        MeshPush push{};
+        push.mvp = m;
+        push.model = m;
+        push.color = glm::vec4(item.color[0], item.color[1], item.color[2], 1.0F);
+        vkCmdPushConstants(cmd, mesh_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPush),
+                           &push);
+
+        const VkBuffer vertex_buffer = it->second.vertex_buffer;
+        const VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, it->second.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, it->second.index_count, 1, 0, 0, 0);
+    }
+}
+
 void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
                             const CameraParams& camera, const std::vector<Light>& lights,
                             const ShadingParams& shading,
-                            const std::vector<MeshInstance>& instances) const {
+                            const std::vector<MeshInstance>& instances,
+                            const std::vector<HudItem>& hud) const {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -759,9 +812,24 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
     scissor.extent = VkExtent2D{extent.width, extent.height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    record_mesh_draws(cmd, extent.width, extent.height, camera, lights, shading, instances, frame_index_);
+    record_mesh_draws(cmd, extent.width, extent.height, camera, lights, shading, instances,
+                      frame_index_);
 
     vkCmdEndRendering(cmd);
+
+    if (!hud.empty()) {
+        // HUD pass: keep the 3D colour (LOAD), clear depth so the overlay is
+        // always on top.
+        VkRenderingAttachmentInfo hud_color = color_attachment;
+        hud_color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        VkRenderingInfo hud_rendering = rendering;
+        hud_rendering.pColorAttachments = &hud_color;
+        vkCmdBeginRendering(cmd, &hud_rendering);
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        record_hud_draws(cmd, extent.width, extent.height, hud);
+        vkCmdEndRendering(cmd);
+    }
 
     transition_image(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                      VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
@@ -842,7 +910,8 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
                                                      const CameraParams& camera,
                                                      const std::vector<Light>& lights,
                                                      const ShadingParams& shading,
-                                                     const std::vector<MeshInstance>& instances) {
+                                                     const std::vector<MeshInstance>& instances,
+                                                     const std::vector<HudItem>& hud) {
     const VkDevice device = context_.device();
     const VmaAllocator allocator = context_.allocator();
     const VkFormat color_format = swapchain_.format();
@@ -976,9 +1045,22 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
         scissor.extent = VkExtent2D{width, height};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        record_mesh_draws(cmd, width, height, camera, lights, shading, instances, kFramesInFlight);
+        record_mesh_draws(cmd, width, height, camera, lights, shading, instances,
+                          kOffscreenUboSlot);
 
         vkCmdEndRendering(cmd);
+
+        if (!hud.empty()) {
+            VkRenderingAttachmentInfo hud_color = color_attachment;
+            hud_color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            VkRenderingInfo hud_rendering = rendering;
+            hud_rendering.pColorAttachments = &hud_color;
+            vkCmdBeginRendering(cmd, &hud_rendering);
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            record_hud_draws(cmd, width, height, hud);
+            vkCmdEndRendering(cmd);
+        }
 
         transition_image(cmd, color_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -1108,9 +1190,10 @@ bool Renderer::draw(Color clear_color, Extent2D window_extent) {
 
 bool Renderer::draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
                           const std::vector<Light>& lights, const ShadingParams& shading,
-                          const std::vector<MeshInstance>& instances) {
+                          const std::vector<MeshInstance>& instances,
+                          const std::vector<HudItem>& hud) {
     return submit_and_present(window_extent, [&](VkCommandBuffer cmd, std::uint32_t image_index) {
-        record_scene(cmd, image_index, clear_color, camera, lights, shading, instances);
+        record_scene(cmd, image_index, clear_color, camera, lights, shading, instances, hud);
     });
 }
 

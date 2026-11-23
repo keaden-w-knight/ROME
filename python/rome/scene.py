@@ -108,6 +108,39 @@ class Light:
 
 
 @dataclass
+class HudItem:
+    """One overlay item: a mesh drawn in screen space over the 3D scene."""
+
+    mesh: Mesh
+    x: float = 0.5  # 0..1, left..right
+    y: float = 0.5  # 0..1, top..bottom
+    size: float = 0.1  # fraction of the screen half-height
+    rotation: Vec3 = (0.0, 0.0, 0.0)  # Euler radians
+    color: Vec3 = (1.0, 1.0, 1.0)
+
+
+class Hud:
+    """A screen-space overlay. Add any mesh (3D or flat) at (x, y) in 0..1 with
+    (0,0) = top-left; items always draw on top of the 3D scene, lit by a fixed
+    front light. GPU backend only."""
+
+    def __init__(self) -> None:
+        self.items: list[HudItem] = []
+
+    def add(self, mesh: Mesh, x: float = 0.5, y: float = 0.5, size: float = 0.1,
+            rotation: Vec3 = (0.0, 0.0, 0.0), color: Vec3 = (1.0, 1.0, 1.0)) -> HudItem:
+        item = HudItem(mesh=mesh, x=x, y=y, size=size, rotation=rotation, color=color)
+        self.items.append(item)
+        return item
+
+    def clear(self) -> None:
+        self.items.clear()
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+
+@dataclass
 class Scene:
     nodes: list[Node] = field(default_factory=list)
     # Lights (GPU backends; the ASCII backend uses its own fixed shading).

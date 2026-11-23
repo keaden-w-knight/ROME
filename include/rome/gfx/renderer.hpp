@@ -59,7 +59,7 @@ public:
     /// rebuilt this frame.
     bool draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
                     const std::vector<Light>& lights, const ShadingParams& shading,
-                    const std::vector<MeshInstance>& instances);
+                    const std::vector<MeshInstance>& instances, const std::vector<HudItem>& hud);
 
     /// Renders a scene to an off-screen image and returns its pixels as RGBA8
     /// (row-major, top row first), width*height*4 bytes. No window involved.
@@ -67,7 +67,8 @@ public:
                                                std::uint32_t height, const CameraParams& camera,
                                                const std::vector<Light>& lights,
                                                const ShadingParams& shading,
-                                               const std::vector<MeshInstance>& instances);
+                                               const std::vector<MeshInstance>& instances,
+                                               const std::vector<HudItem>& hud);
 
     /// Rebuilds the swapchain (and depth buffer) at the given size. Safe to call
     /// with an empty extent (minimised), in which case it does nothing.
@@ -95,8 +96,14 @@ private:
     void record(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color) const;
     void record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
                       const CameraParams& camera, const std::vector<Light>& lights,
-                      const ShadingParams& shading,
-                      const std::vector<MeshInstance>& instances) const;
+                      const ShadingParams& shading, const std::vector<MeshInstance>& instances,
+                      const std::vector<HudItem>& hud) const;
+
+    // Second pass: the HUD overlay, drawn in screen space over the 3D scene with
+    // a cleared depth buffer (so it's always on top). Reuses the mesh pipeline and
+    // a constant "headlight" UBO slot.
+    void record_hud_draws(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height,
+                          const std::vector<HudItem>& hud) const;
 
     // Binds the mesh pipeline and draws every instance; assumes rendering has
     // begun and viewport/scissor are set. `ubo_slot` picks which per-frame light
@@ -128,9 +135,11 @@ private:
     VkPipelineLayout mesh_layout_ = VK_NULL_HANDLE;
     VkPipeline mesh_pipeline_ = VK_NULL_HANDLE;
 
-    // Per-frame light UBO + descriptor set, one slot per frame-in-flight plus a
-    // spare for the off-screen path.
-    static constexpr std::size_t kUboSlots = kFramesInFlight + 1;
+    // Per-frame light UBO + descriptor set: one slot per frame-in-flight, one for
+    // the off-screen path, and one constant slot for the HUD "headlight".
+    static constexpr std::size_t kOffscreenUboSlot = kFramesInFlight;
+    static constexpr std::size_t kHudUboSlot = kFramesInFlight + 1;
+    static constexpr std::size_t kUboSlots = kFramesInFlight + 2;
     VkDescriptorSetLayout frame_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     std::array<VkBuffer, kUboSlots> frame_ubo_{};

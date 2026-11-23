@@ -92,6 +92,32 @@ rome::ShadingParams make_shading(float ambient, float specular, float shininess)
     return s;
 }
 
+/// Parse a Python list of HUD items, each a tuple:
+/// (handle, x, y, size, (rx,ry,rz), (r,g,b)).
+std::vector<rome::HudItem> parse_hud(const nb::list& hud) {
+    std::vector<rome::HudItem> out;
+    const std::size_t count = nb::len(hud);
+    out.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        nb::tuple t = nb::cast<nb::tuple>(hud[i]);
+        rome::HudItem h{};
+        h.mesh = nb::cast<std::uint64_t>(t[0]);
+        h.x = nb::cast<float>(t[1]);
+        h.y = nb::cast<float>(t[2]);
+        h.size = nb::cast<float>(t[3]);
+        nb::tuple r = nb::cast<nb::tuple>(t[4]);
+        h.rotation[0] = nb::cast<float>(r[0]);
+        h.rotation[1] = nb::cast<float>(r[1]);
+        h.rotation[2] = nb::cast<float>(r[2]);
+        nb::tuple c = nb::cast<nb::tuple>(t[5]);
+        h.color[0] = nb::cast<float>(c[0]);
+        h.color[1] = nb::cast<float>(c[1]);
+        h.color[2] = nb::cast<float>(c[2]);
+        out.push_back(h);
+    }
+    return out;
+}
+
 /// Parse a Python list of (handle, (x,y,z), (rx,ry,rz), scale) into instances.
 std::vector<rome::MeshInstance> parse_instances(const nb::list& instances) {
     std::vector<rome::MeshInstance> items;
@@ -171,16 +197,18 @@ NB_MODULE(_rome, m) {
             "render_scene",
             [](rome::App& self, nb::list instances, std::tuple<float, float, float> cam_pos,
                std::tuple<float, float, float> cam_target, std::tuple<float, float, float> up,
-               float fov, nb::list lights, float ambient, float specular, float shininess) {
+               float fov, nb::list lights, float ambient, float specular, float shininess,
+               nb::list hud) {
                 return self.render_scene(parse_instances(instances),
                                          make_camera(cam_pos, cam_target, up, fov),
                                          parse_lights(lights),
-                                         make_shading(ambient, specular, shininess));
+                                         make_shading(ambient, specular, shininess),
+                                         parse_hud(hud));
             },
             "instances"_a, "cam_pos"_a = std::make_tuple(0.0F, 0.0F, -5.0F),
             "cam_target"_a = std::make_tuple(0.0F, 0.0F, 0.0F),
             "up"_a = std::make_tuple(0.0F, 1.0F, 0.0F), "fov"_a = 50.0F, "lights"_a = nb::list(),
-            "ambient"_a = 0.12F, "specular"_a = 0.4F, "shininess"_a = 32.0F,
+            "ambient"_a = 0.12F, "specular"_a = 0.4F, "shininess"_a = 32.0F, "hud"_a = nb::list(),
             "Draw one frame of a scene. instances is a list of "
             "(handle, (x,y,z), (rx,ry,rz), scale, (r,g,b)); lights is a list of "
             "(type, pos, dir, color, intensity, range, inner_cos, outer_cos). "
@@ -191,18 +219,18 @@ NB_MODULE(_rome, m) {
             [](rome::App& self, nb::list instances, std::uint32_t width, std::uint32_t height,
                std::tuple<float, float, float> cam_pos, std::tuple<float, float, float> cam_target,
                std::tuple<float, float, float> up, float fov, nb::list lights, float ambient,
-               float specular, float shininess) {
+               float specular, float shininess, nb::list hud) {
                 std::vector<std::uint8_t> pixels = self.render_to_image(
                     width, height, parse_instances(instances),
                     make_camera(cam_pos, cam_target, up, fov), parse_lights(lights),
-                    make_shading(ambient, specular, shininess));
+                    make_shading(ambient, specular, shininess), parse_hud(hud));
                 return nb::bytes(reinterpret_cast<const char*>(pixels.data()), pixels.size());
             },
             "instances"_a, "width"_a, "height"_a,
             "cam_pos"_a = std::make_tuple(0.0F, 0.0F, -5.0F),
             "cam_target"_a = std::make_tuple(0.0F, 0.0F, 0.0F),
             "up"_a = std::make_tuple(0.0F, 1.0F, 0.0F), "fov"_a = 50.0F, "lights"_a = nb::list(),
-            "ambient"_a = 0.12F, "specular"_a = 0.4F, "shininess"_a = 32.0F,
+            "ambient"_a = 0.12F, "specular"_a = 0.4F, "shininess"_a = 32.0F, "hud"_a = nb::list(),
             "Render a scene off-screen; returns width*height*4 RGBA8 bytes.")
 
         .def("set_title", &rome::App::set_title, "title"_a, "Set the window title text.")

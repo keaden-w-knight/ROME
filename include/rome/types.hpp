@@ -54,6 +54,18 @@ struct CameraParams {
     float fov_deg = 50.0F;
 };
 
+/// A HUD overlay item: a mesh drawn in screen space on top of the 3D scene.
+/// x/y are 0..1 (0,0 = top-left, 1,1 = bottom-right); size is a fraction of the
+/// screen half-height; rotation is Euler radians; colour is linear RGB.
+struct HudItem {
+    std::uint64_t mesh = 0;
+    float x = 0.5F;
+    float y = 0.5F;
+    float size = 0.1F;
+    float rotation[3]{0.0F, 0.0F, 0.0F};
+    float color[3]{1.0F, 1.0F, 1.0F};
+};
+
 /// One placed mesh for a frame: a mesh handle (from App::upload_mesh) plus its
 /// transform and base colour. Rotation is Euler radians, applied Y -> X -> Z;
 /// scale is uniform; colour is linear RGB in 0..1.

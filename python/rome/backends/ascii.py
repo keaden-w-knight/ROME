@@ -84,7 +84,8 @@ class AsciiBackend(Backend):
         self._prev = held
         return InputState(held=held, pressed=pressed)
 
-    def render(self, scene: Scene, camera: Camera) -> None:
+    def render(self, scene: Scene, camera: Camera, hud=None) -> None:
+        # HUD overlay is GPU-only for now; the terminal backend ignores it.
         ta = self._ta
         s = ta.Scene()
         for node in scene.nodes:

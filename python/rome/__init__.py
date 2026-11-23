@@ -29,7 +29,7 @@ from .backends import (
 from .camera import Camera
 from .image import save_png
 from .input import InputState
-from .scene import Light, Mesh, Node, Scene
+from .scene import Hud, Light, Mesh, Node, Scene
 
 try:  # version comes from installed package metadata when available
     from importlib.metadata import PackageNotFoundError, version
@@ -48,6 +48,7 @@ __all__ = [
     "Node",
     "Mesh",
     "Light",
+    "Hud",
     "InputState",
     "save_png",
     "available_backends",

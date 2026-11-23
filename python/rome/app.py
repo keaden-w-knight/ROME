@@ -20,7 +20,7 @@ from typing import Callable
 from .backends import DEFAULT_BACKEND, BackendConfig, create_backend
 from .camera import Camera
 from .input import InputState
-from .scene import Scene
+from .scene import Hud, Scene
 
 
 class App:
@@ -38,6 +38,7 @@ class App:
     ) -> None:
         self.scene = scene if scene is not None else Scene()
         self.camera = camera if camera is not None else Camera()
+        self.hud = Hud()  # screen-space overlay; add items with app.hud.add(...)
         self.backend_name = backend or DEFAULT_BACKEND
         self._backend = create_backend(
             backend,
@@ -80,13 +81,13 @@ class App:
 
     def draw(self) -> None:
         """Render the current scene from the current camera."""
-        self._backend.render(self.scene, self.camera)
+        self._backend.render(self.scene, self.camera, self.hud)
 
     def render_image(self, width: int = 1280, height: int = 720) -> bytes:
         """Render the current scene off-screen (no window drawing) and return
         width*height*4 RGBA8 bytes. Backend-dependent; the vulkan backend
         supports it. Pair with rome.save_png."""
-        return self._backend.render_image(self.scene, self.camera, width, height)
+        return self._backend.render_image(self.scene, self.camera, width, height, self.hud)
 
     def run(self, update: Callable[["App"], None] | None = None) -> None:
         """Drive the loop to completion. `update(app)` runs each frame before the

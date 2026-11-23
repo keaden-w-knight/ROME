@@ -64,7 +64,15 @@ class VulkanBackend(Backend):
         dx, dy = self._app.mouse_delta()
         return InputState(held=held, pressed=pressed, mouse_dx=dx, mouse_dy=dy)
 
-    def render(self, scene: Scene, camera: Camera) -> None:
+    def _hud_items(self, hud) -> list:
+        if hud is None:
+            return []
+        return [
+            (self._realize(it.mesh), it.x, it.y, it.size, it.rotation, it.color)
+            for it in hud.items
+        ]
+
+    def render(self, scene: Scene, camera: Camera, hud=None) -> None:
         instances = [
             (self._realize(node.mesh), node.position, node.rotation, node.scale, node.color)
             for node in scene.nodes
@@ -79,9 +87,11 @@ class VulkanBackend(Backend):
             ambient=scene.ambient,
             specular=scene.specular,
             shininess=scene.shininess,
+            hud=self._hud_items(hud),
         )
 
-    def render_image(self, scene: Scene, camera: Camera, width: int, height: int) -> bytes:
+    def render_image(self, scene: Scene, camera: Camera, width: int, height: int,
+                     hud=None) -> bytes:
         instances = [
             (self._realize(node.mesh), node.position, node.rotation, node.scale, node.color)
             for node in scene.nodes
@@ -98,6 +108,7 @@ class VulkanBackend(Backend):
             ambient=scene.ambient,
             specular=scene.specular,
             shininess=scene.shininess,
+            hud=self._hud_items(hud),
         )
 
     def set_title(self, text: str) -> None:
