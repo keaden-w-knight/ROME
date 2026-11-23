@@ -8,6 +8,7 @@ smooth enough to steer by. A windowed backend would read true key state instead.
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 
@@ -18,6 +19,11 @@ from . import register_backend
 from .base import Backend, BackendConfig
 
 _HOLD = 0.12  # seconds a key stays "held" after its last event
+
+# One ANSI escape: CSI params + a final letter. three_ascii emits `\x1b[H` (home)
+# and 24-bit colour `\x1b[…m` sequences; we tokenise both to composite the HUD at
+# the character-cell level over the already-coloured frame.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 class AsciiBackend(Backend):
@@ -74,7 +80,6 @@ class AsciiBackend(Backend):
         return InputState(held=held, pressed=pressed)
 
     def render(self, scene: Scene, camera: Camera, hud=None) -> None:
-        # HUD overlay is GPU-only for now; the terminal backend ignores it.
         ta = self._ta
         s = ta.Scene()
         for node in scene.nodes:
@@ -97,8 +102,44 @@ class AsciiBackend(Backend):
             lights=[light.to_tuple() for light in scene.lights],
             ambient=scene.ambient,
         )
+        if hud is not None and hud.items:
+            frame = self._composite_hud(frame, hud.items)
         sys.stdout.write(frame)
         sys.stdout.flush()
+
+    def _composite_hud(self, frame: str, items) -> str:
+        """Overlay HUD items onto the coloured frame. Each item's mesh is rendered
+        to a small plain-glyph block and its non-blank cells are stamped onto the
+        frame at the item's screen position (x, y in 0..1, top-left origin), in the
+        item's colour — the terminal equivalent of the GPU HUD's always-on-top pass."""
+        parsed = [_parse_line(line) for line in frame.split("\n")]
+        nrows = len(parsed)
+        for item in items:
+            native = self._realize(item.mesh)
+            # size is a fraction of the grid height; width is doubled because a
+            # terminal cell is about twice as tall as it is wide.
+            ih = max(2, round(item.size * self._h))
+            iw = max(2, round(item.size * self._h * 2))
+            esc = _color_escape(item.color)
+            block = self._ta.render(
+                native, width=iw, height=ih,
+                yaw=float(item.rotation[1]), pitch=float(item.rotation[0]),
+                dist=3.0, color="glyph", vt=False,
+            )
+            row0 = round(item.y * self._h - ih / 2)
+            col0 = round(item.x * self._w - iw / 2)
+            for ry, rline in enumerate(block.split("\n")):
+                tr = row0 + ry
+                if tr < 0 or tr >= nrows:
+                    continue
+                cells = parsed[tr][1]
+                for rx, ch in enumerate(rline):
+                    if ch == " ":
+                        continue  # blank glyph = transparent
+                    tc = col0 + rx
+                    if 0 <= tc < len(cells):
+                        cells[tc] = [ch, esc]
+        return "\n".join(prefix + _serialize_cells(cells) for prefix, cells in parsed)
 
     def set_title(self, text: str) -> None:
         # OSC 0: set the terminal window/tab title.
@@ -120,6 +161,52 @@ class AsciiBackend(Backend):
 
     def info(self) -> str:
         return f"ascii {self._w}x{self._h}"
+
+
+def _parse_line(line: str):
+    """Split one frame line into ([non-colour prefix escapes], [[glyph, colour], …]).
+
+    A cell's colour is the active 24-bit escape string, or None for the default.
+    Non-colour escapes (the leading `\\x1b[H` home) are kept as a prefix so the
+    re-serialised line is byte-identical when nothing is composited over it."""
+    cells: list[list] = []
+    prefix = ""
+    cur = None
+    pos = 0
+    for mo in _ANSI.finditer(line):
+        for ch in line[pos:mo.start()]:
+            cells.append([ch, cur])
+        esc = mo.group()
+        if esc.endswith("m"):
+            cur = None if esc == "\x1b[0m" else esc
+        else:
+            prefix += esc  # cursor move etc.: carries no colour, kept verbatim
+        pos = mo.end()
+    for ch in line[pos:]:
+        cells.append([ch, cur])
+    return prefix, cells
+
+
+def _serialize_cells(cells) -> str:
+    """Re-emit cells, writing a colour escape only when it changes (run-length,
+    as three_ascii does), and a trailing reset. Empty line stays empty."""
+    if not cells:
+        return ""
+    out: list[str] = []
+    cur = None  # a line begins after the previous line's reset
+    for glyph, color in cells:
+        if color != cur:
+            out.append("\x1b[0m" if color is None else color)
+            cur = color
+        out.append(glyph)
+    out.append("\x1b[0m")
+    return "".join(out)
+
+
+def _color_escape(color) -> str:
+    """A 24-bit foreground escape from a linear RGB 0..1 triple."""
+    r, g, b = (max(0, min(255, round(c * 255))) for c in color)
+    return f"\x1b[38;2;{r};{g};{b}m"
 
 
 def _enable_ansi() -> None:

@@ -326,7 +326,8 @@ position, FOV, speed, and mouse sensitivity in `config/game.toml` under
 
 `app.hud.add(mesh, x, y, size, rotation, color)` draws a mesh in screen space on
 top of the 3D scene — `x`/`y` are 0..1 with (0,0) top-left. Good for markers,
-reticles, or 3D icons. GPU backend only.
+reticles, or 3D icons. Both backends: the GPU draws it as an always-on-top pass,
+the terminal composites it as glyphs over the frame.
 
 ## Events
 
