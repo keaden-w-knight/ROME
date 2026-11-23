@@ -61,6 +61,11 @@ class App:
         """Set the window (or terminal) title — handy for an FPS readout."""
         self._backend.set_title(text)
 
+    def set_mouse_look(self, enabled: bool = True) -> None:
+        """Capture the cursor for mouse-look (GPU backends). The ASCII backend
+        ignores it — terminals can't do relative mouse motion."""
+        self._backend.set_mouse_look(enabled)
+
     def info(self) -> str:
         return self._backend.info()
 

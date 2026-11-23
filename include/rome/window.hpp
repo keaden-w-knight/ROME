@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "rome/types.hpp"
@@ -63,6 +64,13 @@ public:
     /// Keys pressed since the previous call, then cleared (press edges).
     std::vector<std::string> take_pressed();
 
+    /// Relative mouse mode captures the cursor and reports motion as deltas —
+    /// what mouse-look needs. Off by default.
+    void set_relative_mouse(bool enabled);
+
+    /// Accumulated mouse motion (dx, dy) since the previous call, then reset.
+    std::pair<float, float> take_mouse_delta();
+
     [[nodiscard]] SDL_Window* handle() const {
         return window_;
     }
@@ -73,6 +81,8 @@ private:
     bool resized_ = false;
     std::unordered_set<std::string> held_keys_;
     std::vector<std::string> pressed_keys_;
+    float mouse_dx_ = 0.0F;
+    float mouse_dy_ = 0.0F;
 };
 
 }  // namespace rome

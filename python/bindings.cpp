@@ -162,6 +162,15 @@ NB_MODULE(_rome, m) {
         .def("keys_held", &rome::App::keys_held, "List of keys currently held down.")
         .def("take_pressed_keys", &rome::App::take_pressed_keys,
              "List of keys pressed since the last call (then cleared).")
+        .def("set_mouse_look", &rome::App::set_mouse_look, "enabled"_a,
+             "Capture the cursor and report relative motion, for mouse-look.")
+        .def(
+            "mouse_delta",
+            [](rome::App& self) {
+                const std::pair<float, float> d = self.mouse_delta();
+                return nb::make_tuple(d.first, d.second);
+            },
+            "Mouse motion (dx, dy) since the last call, then reset.")
 
         .def("close", &rome::App::close, "Ask the loop to stop after this frame.")
 

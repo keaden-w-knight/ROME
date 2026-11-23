@@ -31,6 +31,11 @@ class Mesh:
         return Mesh(kind="cube")
 
     @staticmethod
+    def plane() -> "Mesh":
+        """A flat square facing up (+Y). Scale it for a ground."""
+        return Mesh(kind="plane")
+
+    @staticmethod
     def load(path: str) -> "Mesh":
         """A mesh from a 3D file on disk: OBJ, or glTF 2.0 (.glb / .gltf)."""
         lower = path.lower()

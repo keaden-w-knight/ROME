@@ -80,6 +80,15 @@ def sphere(segments: int = 32, rings: int = 20) -> Geometry:
     return _build(verts, tris, normals)
 
 
+def plane() -> Geometry:
+    """A flat square on the XZ plane (y = 0), facing up (+Y). Scale it for a
+    ground. Centred, so one unit each way before Node scale."""
+    verts = [(-1.0, 0.0, -1.0), (1.0, 0.0, -1.0), (1.0, 0.0, 1.0), (-1.0, 0.0, 1.0)]
+    normals = [(0.0, 1.0, 0.0)] * 4
+    tris = [(0, 1, 2), (0, 2, 3)]
+    return _build(verts, tris, normals)
+
+
 def load_obj(path: str) -> Geometry:
     verts: list[Vec3] = []
     tris: list[tuple[int, int, int]] = []

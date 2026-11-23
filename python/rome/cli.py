@@ -50,7 +50,13 @@ def load_config() -> dict:
 def main() -> None:
     cfg = load_config()
     scene = build_scene(ROOT, cfg)
-    player = Player(distance=cfg["camera"]["distance"], fov=cfg["camera"]["fov"])
+    p = cfg["player"]
+    player = Player(
+        position=tuple(p["start"]),
+        fov=p["fov"],
+        speed=p["speed"],
+        sensitivity=p["sensitivity"],
+    )
 
     app = rome.App(
         scene=scene,
@@ -60,6 +66,7 @@ def main() -> None:
         height=cfg["window"]["height"],
         title=cfg["game"]["title"],
     )
+    app.set_mouse_look(True)  # capture the mouse for look (GPU; the terminal ignores it)
     title = cfg["game"]["title"]
     print(f"{title} — {app.info()}")
 
@@ -99,55 +106,83 @@ import rome
 def build_scene(root: Path, cfg: dict) -> rome.Scene:
     scene = rome.Scene()
 
-    # A starter arrangement — swap for your own.
-    scene.add(rome.Mesh.sphere(), position=(-2.6, 0.0, 0.0), scale=0.9)
-    scene.add(rome.Mesh.sphere(), position=(0.0, 0.0, 0.0), scale=1.3)
-    scene.add(rome.Mesh.cube(), position=(2.6, 0.2, 0.0), rotation=(0.3, 0.6, 0.0), scale=0.9)
+    # A ground to walk on, and a few objects to walk around. Make it your own.
+    scene.add(rome.Mesh.plane(), scale=14.0, color=(0.28, 0.30, 0.34))
+    scene.add(rome.Mesh.sphere(), position=(-2.5, 1.0, 3.0), color=(0.80, 0.40, 0.40))
+    scene.add(rome.Mesh.cube(), position=(2.5, 1.0, 4.0), rotation=(0.0, 0.5, 0.0),
+              color=(0.45, 0.60, 0.88))
+    scene.add(rome.Mesh.sphere(20, 14), position=(0.0, 0.8, 7.0), scale=0.8,
+              color=(0.5, 0.8, 0.5))
 
-    # Any .obj dropped in assets/ is loaded automatically.
-    for obj in sorted((root / "assets").glob("*.obj")):
-        scene.add(rome.Mesh.load(str(obj)), position=(0.0, -1.5, 0.0))
+    # Any .obj / .glb / .gltf dropped in assets/ is loaded automatically.
+    assets = root / "assets"
+    if assets.is_dir():
+        for path in sorted(assets.iterdir()):
+            if path.suffix.lower() in (".obj", ".glb", ".gltf"):
+                scene.add(rome.Mesh.load(str(path)), position=(0.0, 1.0, 0.0))
 
     return scene
 '''
 
 _PLAYER = '''\
-"""Player control: orbit the camera around the scene. Make it your own."""
+"""Player control: an FPS-style free-look camera. Make it your own.
+
+WASD / arrow keys move; the mouse looks around (GPU backend). In the terminal
+there's no mouse, so Q / E turn instead.
+"""
 from __future__ import annotations
+
+import math
 
 import rome
 
 
 class Player:
-    def __init__(self, distance: float = 8.0, fov: float = 55.0) -> None:
-        self.yaw = 0.6
-        self.pitch = 0.4
-        self.dist = distance
+    def __init__(
+        self,
+        position: tuple[float, float, float] = (0.0, 1.6, -6.0),
+        yaw: float = 0.0,
+        pitch: float = 0.0,
+        fov: float = 60.0,
+        speed: float = 4.0,
+        sensitivity: float = 0.0025,
+    ) -> None:
+        self.x, self.y, self.z = position
+        self.yaw = yaw
+        self.pitch = pitch
         self.fov = fov
-        self.auto = True
+        self.speed = speed
+        self.sensitivity = sensitivity
         self._refresh()
 
     def _refresh(self) -> None:
-        self.camera = rome.Camera.orbit(self.yaw, self.pitch, self.dist, fov=self.fov)
+        cp = math.cos(self.pitch)
+        fwd = (math.sin(self.yaw) * cp, math.sin(self.pitch), math.cos(self.yaw) * cp)
+        self.camera = rome.Camera(
+            position=(self.x, self.y, self.z),
+            target=(self.x + fwd[0], self.y + fwd[1], self.z + fwd[2]),
+            fov=self.fov,
+        )
 
     def update(self, dt: float, input: rome.InputState) -> None:
-        turn = 1.5 * dt
-        if input.down("a"):
-            self.yaw -= turn
-        if input.down("d"):
-            self.yaw += turn
-        if input.down("w"):
-            self.pitch = min(1.4, self.pitch + turn)
-        if input.down("s"):
-            self.pitch = max(-1.4, self.pitch - turn)
+        # Look: mouse (GPU) or Q/E to turn (terminal fallback).
+        self.yaw += input.mouse_dx * self.sensitivity
+        self.pitch -= input.mouse_dy * self.sensitivity
         if input.down("q"):
-            self.dist += 4.0 * dt
+            self.yaw -= 1.5 * dt
         if input.down("e"):
-            self.dist = max(3.0, self.dist - 4.0 * dt)
-        if input.just_pressed("r"):
-            self.auto = not self.auto
-        if self.auto:
-            self.yaw += 0.4 * dt
+            self.yaw += 1.5 * dt
+        limit = math.pi / 2 - 0.01
+        self.pitch = max(-limit, min(limit, self.pitch))
+
+        # Move on the ground plane: forward/back and strafe from the current yaw.
+        fx, fz = math.sin(self.yaw), math.cos(self.yaw)
+        rx, rz = math.cos(self.yaw), -math.sin(self.yaw)
+        forward = (1.0 if input.down("w") else 0.0) - (1.0 if input.down("s") else 0.0)
+        strafe = (1.0 if input.down("d") else 0.0) - (1.0 if input.down("a") else 0.0)
+        step = self.speed * dt
+        self.x += (fx * forward + rx * strafe) * step
+        self.z += (fz * forward + rz * strafe) * step
         self._refresh()
 '''
 
@@ -166,9 +201,12 @@ backend = "__BACKEND__"
 width = __WIDTH__
 height = __HEIGHT__
 
-[camera]
-distance = 8.0
-fov = 55.0
+[player]
+# Starting position (x, y, z), field of view, move speed, mouse sensitivity.
+start = [0.0, 1.6, -6.0]
+fov = 60.0
+speed = 4.0
+sensitivity = 0.0025
 """
 
 _README = """\
@@ -180,7 +218,7 @@ A game built on [ROME](https://github.com/keaden-w-knight/ROME).
 python main.py
 ```
 
-Controls (ascii backend): **W/A/S/D** orbit · **Q/E** zoom · **R** auto-spin · **Esc** quit
+Controls: **W/A/S/D** or **arrows** move · **mouse** look (GPU) or **Q/E** turn (terminal) · **Esc** quit
 
 ## Layout
 

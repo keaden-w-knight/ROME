@@ -61,6 +61,8 @@ class AsciiBackend(Backend):
             geo = geometry.sphere(mesh.segments, mesh.rings)
         elif mesh.kind == "cube":
             geo = geometry.cube()
+        elif mesh.kind == "plane":
+            geo = geometry.plane()
         elif mesh.kind == "obj":
             geo = geometry.load_obj(mesh.path)
         elif mesh.kind == "gltf":

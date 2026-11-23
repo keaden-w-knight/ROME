@@ -82,7 +82,9 @@ Window::Window(Window&& other) noexcept
       should_close_(other.should_close_),
       resized_(other.resized_),
       held_keys_(std::move(other.held_keys_)),
-      pressed_keys_(std::move(other.pressed_keys_)) {}
+      pressed_keys_(std::move(other.pressed_keys_)),
+      mouse_dx_(other.mouse_dx_),
+      mouse_dy_(other.mouse_dy_) {}
 
 Window& Window::operator=(Window&& other) noexcept {
     if (this != &other) {
@@ -95,6 +97,8 @@ Window& Window::operator=(Window&& other) noexcept {
         resized_ = other.resized_;
         held_keys_ = std::move(other.held_keys_);
         pressed_keys_ = std::move(other.pressed_keys_);
+        mouse_dx_ = other.mouse_dx_;
+        mouse_dy_ = other.mouse_dy_;
     }
     return *this;
 }
@@ -143,6 +147,11 @@ bool Window::pump_events() {
                 break;
             }
 
+            case SDL_EVENT_MOUSE_MOTION:
+                mouse_dx_ += event.motion.xrel;
+                mouse_dy_ += event.motion.yrel;
+                break;
+
             default:
                 break;
         }
@@ -179,6 +188,19 @@ void Window::set_title(const std::string& title) {
     if (window_ != nullptr) {
         SDL_SetWindowTitle(window_, title.c_str());
     }
+}
+
+void Window::set_relative_mouse(bool enabled) {
+    if (window_ != nullptr) {
+        SDL_SetWindowRelativeMouseMode(window_, enabled);
+    }
+}
+
+std::pair<float, float> Window::take_mouse_delta() {
+    const std::pair<float, float> delta{mouse_dx_, mouse_dy_};
+    mouse_dx_ = 0.0F;
+    mouse_dy_ = 0.0F;
+    return delta;
 }
 
 }  // namespace rome

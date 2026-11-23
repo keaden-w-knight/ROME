@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "rome/types.hpp"
@@ -74,6 +75,16 @@ public:
 
     /// Keys pressed since the previous call, then cleared.
     std::vector<std::string> take_pressed_keys();
+
+    /// Capture the cursor and report motion as deltas, for mouse-look.
+    void set_mouse_look(bool enabled) {
+        window_.set_relative_mouse(enabled);
+    }
+
+    /// Mouse motion (dx, dy) since the previous call, then reset.
+    std::pair<float, float> mouse_delta() {
+        return window_.take_mouse_delta();
+    }
 
     void close() {
         window_.request_close();

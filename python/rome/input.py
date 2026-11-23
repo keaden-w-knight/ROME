@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 class InputState:
     held: frozenset[str] = field(default_factory=frozenset)
     pressed: frozenset[str] = field(default_factory=frozenset)
+    mouse_dx: float = 0.0  # relative mouse motion this frame (GPU backend)
+    mouse_dy: float = 0.0
 
     @classmethod
     def empty(cls) -> "InputState":

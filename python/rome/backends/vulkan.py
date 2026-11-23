@@ -44,6 +44,8 @@ class VulkanBackend(Backend):
             geo = geometry.sphere(mesh.segments, mesh.rings)
         elif mesh.kind == "cube":
             geo = geometry.cube()
+        elif mesh.kind == "plane":
+            geo = geometry.plane()
         elif mesh.kind == "obj":
             geo = geometry.load_obj(mesh.path)
         elif mesh.kind == "gltf":
@@ -59,7 +61,8 @@ class VulkanBackend(Backend):
             return InputState.empty()
         held = frozenset(self._app.keys_held())
         pressed = frozenset(self._app.take_pressed_keys())
-        return InputState(held=held, pressed=pressed)
+        dx, dy = self._app.mouse_delta()
+        return InputState(held=held, pressed=pressed, mouse_dx=dx, mouse_dy=dy)
 
     def render(self, scene: Scene, camera: Camera) -> None:
         instances = [
@@ -92,6 +95,10 @@ class VulkanBackend(Backend):
     def set_title(self, text: str) -> None:
         if self._app is not None:
             self._app.set_title(text)
+
+    def set_mouse_look(self, enabled: bool) -> None:
+        if self._app is not None:
+            self._app.set_mouse_look(enabled)
 
     def should_close(self) -> bool:
         return not self._running

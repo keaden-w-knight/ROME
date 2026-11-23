@@ -61,6 +61,10 @@ class Backend(ABC):
         """Set the window/terminal title (e.g. an FPS readout). Optional; the
         default does nothing."""
 
+    def set_mouse_look(self, enabled: bool) -> None:
+        """Capture the cursor for mouse-look. Optional; backends that can't do
+        relative mouse motion (e.g. a terminal) ignore it."""
+
     def info(self) -> str:
         """A human-readable line about the backend (device name, mode, …)."""
         return self.name
