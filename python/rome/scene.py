@@ -55,15 +55,66 @@ class Node:
     name: str | None = None
 
 
+_LIGHT_KIND = {"directional": 0, "point": 1, "spot": 2}
+
+
+@dataclass
+class Light:
+    """A light: directional (a sun), point (a bulb), or spot (a cone). Placed and
+    oriented like a Node. GPU backends only — the ASCII backend uses its own fixed
+    shading. Use the directional()/point()/spot() constructors, or build directly."""
+
+    kind: str = "directional"  # "directional" | "point" | "spot"
+    position: Vec3 = (0.0, 5.0, 0.0)  # point / spot
+    direction: Vec3 = (-0.4, -0.9, 0.3)  # directional / spot axis
+    color: Vec3 = (1.0, 1.0, 1.0)
+    intensity: float = 1.0
+    range: float = 20.0  # point / spot distance falloff
+    inner_angle: float = 20.0  # spot cone, degrees (full brightness within)
+    outer_angle: float = 30.0  # spot cone, degrees (zero beyond)
+
+    @staticmethod
+    def directional(direction: Vec3 = (-0.4, -0.9, 0.3), color: Vec3 = (1.0, 1.0, 1.0),
+                    intensity: float = 1.0) -> "Light":
+        return Light(kind="directional", direction=direction, color=color, intensity=intensity)
+
+    @staticmethod
+    def point(position: Vec3 = (0.0, 5.0, 0.0), color: Vec3 = (1.0, 1.0, 1.0),
+              intensity: float = 1.0, range: float = 20.0) -> "Light":
+        return Light(kind="point", position=position, color=color, intensity=intensity, range=range)
+
+    @staticmethod
+    def spot(position: Vec3 = (0.0, 5.0, 0.0), direction: Vec3 = (0.0, -1.0, 0.0),
+             color: Vec3 = (1.0, 1.0, 1.0), intensity: float = 1.0, range: float = 20.0,
+             inner_angle: float = 20.0, outer_angle: float = 30.0) -> "Light":
+        return Light(kind="spot", position=position, direction=direction, color=color,
+                     intensity=intensity, range=range, inner_angle=inner_angle,
+                     outer_angle=outer_angle)
+
+    def to_tuple(self) -> tuple:
+        """Flatten to the tuple the renderer binding expects."""
+        import math
+
+        return (
+            _LIGHT_KIND.get(self.kind, 0),
+            tuple(self.position),
+            tuple(self.direction),
+            tuple(self.color),
+            float(self.intensity),
+            float(self.range),
+            float(math.cos(math.radians(self.inner_angle))),
+            float(math.cos(math.radians(self.outer_angle))),
+        )
+
+
 @dataclass
 class Scene:
     nodes: list[Node] = field(default_factory=list)
-    # A point light (GPU backends; the ASCII backend uses its own fixed shading).
-    light_position: Vec3 = (3.0, 6.0, -2.0)
-    light_color: Vec3 = (1.0, 1.0, 1.0)
-    ambient: float = 0.18
-    specular: float = 0.4
-    shininess: float = 32.0
+    # Lights (GPU backends; the ASCII backend uses its own fixed shading).
+    lights: list[Light] = field(default_factory=lambda: [Light.directional()])
+    ambient: float = 0.12  # scene-wide ambient fill
+    specular: float = 0.4  # material highlight strength
+    shininess: float = 32.0  # material highlight tightness
 
     def add(
         self,
@@ -79,6 +130,10 @@ class Scene:
         )
         self.nodes.append(node)
         return node
+
+    def add_light(self, light: Light) -> Light:
+        self.lights.append(light)
+        return light
 
     def remove(self, node: Node) -> None:
         self.nodes.remove(node)

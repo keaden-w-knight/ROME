@@ -4,16 +4,11 @@
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
 
-// Per-draw push constant. The light fields are the same for every draw in a
-// frame; carrying them here keeps the renderer free of descriptor sets. 192
-// bytes — within the 256-byte push limit of the target GPUs.
+// Per-draw push constant: transform + albedo (144 bytes).
 layout(push_constant) uniform Push {
     mat4 mvp;
     mat4 model;
-    vec4 color;        // rgb albedo
-    vec4 light_pos;    // xyz world position, w = ambient
-    vec4 light_color;  // rgb colour,        w = specular strength
-    vec4 eye;          // xyz camera position, w = shininess
+    vec4 color;
 } pc;
 
 layout(location = 0) out vec3 v_normal;

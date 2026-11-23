@@ -25,11 +25,22 @@ struct Color {
     friend bool operator==(const Color&, const Color&) = default;
 };
 
-/// A point light plus the shading params for a frame. Linear RGB in 0..1.
+/// One light for a frame: directional, point, or spot. Linear RGB in 0..1.
 struct Light {
-    float position[3]{3.0F, 6.0F, -2.0F};
+    int type = 0;  // 0 = directional, 1 = point, 2 = spot
+    float position[3]{0.0F, 5.0F, 0.0F};     // point / spot
+    float direction[3]{0.0F, -1.0F, 0.0F};   // directional / spot axis
     float color[3]{1.0F, 1.0F, 1.0F};
-    float ambient = 0.18F;    // constant fill so unlit faces aren't black
+    float intensity = 1.0F;
+    float range = 20.0F;      // point / spot distance falloff
+    float inner_cos = 0.94F;  // spot: cos(inner cone angle)
+    float outer_cos = 0.87F;  // spot: cos(outer cone angle)
+};
+
+/// Scene-wide shading params (ambient fill + the material highlight), not
+/// per-light.
+struct ShadingParams {
+    float ambient = 0.12F;    // constant fill so unlit faces aren't black
     float specular = 0.4F;    // Blinn-Phong highlight strength
     float shininess = 32.0F;  // highlight tightness
 };

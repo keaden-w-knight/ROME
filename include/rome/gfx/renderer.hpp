@@ -58,13 +58,15 @@ public:
     /// z-buffered, seen through the camera. Returns false if the swapchain was
     /// rebuilt this frame.
     bool draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
-                    const Light& light, const std::vector<MeshInstance>& instances);
+                    const std::vector<Light>& lights, const ShadingParams& shading,
+                    const std::vector<MeshInstance>& instances);
 
     /// Renders a scene to an off-screen image and returns its pixels as RGBA8
     /// (row-major, top row first), width*height*4 bytes. No window involved.
     std::vector<std::uint8_t> render_offscreen(Color clear_color, std::uint32_t width,
                                                std::uint32_t height, const CameraParams& camera,
-                                               const Light& light,
+                                               const std::vector<Light>& lights,
+                                               const ShadingParams& shading,
                                                const std::vector<MeshInstance>& instances);
 
     /// Rebuilds the swapchain (and depth buffer) at the given size. Safe to call
@@ -84,21 +86,25 @@ private:
     void destroy_present_semaphores();
     void create_pipeline();
     void create_mesh_pipeline();
+    void create_descriptors();
+    void destroy_descriptors();
     void create_depth_resources(Extent2D extent);
     void destroy_depth_resources();
     void destroy_meshes();
 
     void record(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color) const;
     void record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
-                      const CameraParams& camera, const Light& light,
+                      const CameraParams& camera, const std::vector<Light>& lights,
+                      const ShadingParams& shading,
                       const std::vector<MeshInstance>& instances) const;
 
     // Binds the mesh pipeline and draws every instance; assumes rendering has
-    // begun and viewport/scissor are set. Shared by the windowed and off-screen
-    // paths.
+    // begun and viewport/scissor are set. `ubo_slot` picks which per-frame light
+    // UBO / descriptor set to fill and bind. Shared by windowed and off-screen.
     void record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height,
-                           const CameraParams& camera, const Light& light,
-                           const std::vector<MeshInstance>& instances) const;
+                           const CameraParams& camera, const std::vector<Light>& lights,
+                           const ShadingParams& shading,
+                           const std::vector<MeshInstance>& instances, std::size_t ubo_slot) const;
 
     // The acquire / submit / present scaffolding, shared by both draw paths. The
     // record callback fills the command buffer for the acquired image.
@@ -121,6 +127,16 @@ private:
 
     VkPipelineLayout mesh_layout_ = VK_NULL_HANDLE;
     VkPipeline mesh_pipeline_ = VK_NULL_HANDLE;
+
+    // Per-frame light UBO + descriptor set, one slot per frame-in-flight plus a
+    // spare for the off-screen path.
+    static constexpr std::size_t kUboSlots = kFramesInFlight + 1;
+    VkDescriptorSetLayout frame_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
+    std::array<VkBuffer, kUboSlots> frame_ubo_{};
+    std::array<VmaAllocation, kUboSlots> frame_ubo_alloc_{};
+    std::array<void*, kUboSlots> frame_ubo_mapped_{};
+    std::array<VkDescriptorSet, kUboSlots> frame_sets_{};
 
     VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
     VkImage depth_image_ = VK_NULL_HANDLE;

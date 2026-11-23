@@ -121,6 +121,15 @@ def build_scene(root: Path, cfg: dict) -> rome.Scene:
             if path.suffix.lower() in (".obj", ".glb", ".gltf"):
                 scene.add(rome.Mesh.load(str(path)), position=(0.0, 1.0, 0.0))
 
+    # Lights: a soft "sun" (directional) plus a warm point light over the scene.
+    # Try rome.Light.spot(...) too. Lights are GPU-only; the terminal uses its
+    # own shading. Tune scene.ambient / specular / shininess to taste.
+    scene.lights = [
+        rome.Light.directional(direction=(-0.4, -0.9, 0.3), intensity=0.8),
+        rome.Light.point(position=(2.0, 4.0, 3.0), color=(1.0, 0.9, 0.7), intensity=1.0, range=18.0),
+    ]
+    scene.ambient = 0.14
+
     return scene
 '''
 
@@ -219,17 +228,79 @@ A game built on [ROME](https://github.com/keaden-w-knight/ROME).
 python main.py
 ```
 
-Controls: **W/A/S/D** or **arrows** move · **mouse** look (GPU) or **Q/E** turn (terminal) · **Esc** quit
+## Controls
 
-## Layout
+| | |
+|---|---|
+| **W/A/S/D** or **arrows** | move / strafe |
+| **mouse** | look around (GPU backend) |
+| **Q / E** | turn (terminal fallback — no mouse) |
+| **Esc** | quit |
+
+## Project layout
 
 - `main.py` — entry point: loads config, builds the scene, runs the loop.
-- `game/world.py` — builds the scene; also loads any `.obj` in `assets/`.
-- `game/player.py` — player/camera control from input.
-- `assets/` — drop models and other assets here.
-- `config/game.toml` — title, backend, window size, camera.
+- `game/world.py` — builds the scene (meshes + lights); loads `assets/`.
+- `game/player.py` — the FPS camera controller.
+- `assets/` — drop `.obj` / `.glb` / `.gltf` models here (auto-loaded).
+- `config/game.toml` — title, backend, window size, player settings.
 
-Switch renderer in `config/game.toml` (`backend = "vulkan"` or `"ascii"`).
+Switch renderer in `config/game.toml`: `backend = "vulkan"` (GPU window) or
+`"ascii"` (terminal). Run `rome backends` to list them.
+
+## Building a scene (`game/world.py`)
+
+Everything lives on a `rome.Scene`. Add meshes with `scene.add(...)`, lights with
+`scene.lights` (or `scene.add_light(...)`).
+
+### Meshes
+
+```python
+scene.add(mesh, position=(x, y, z), rotation=(rx, ry, rz), scale=1.0, color=(r, g, b))
+```
+
+Built-in meshes, plus files:
+
+| Mesh | |
+|---|---|
+| `rome.Mesh.cube()` | unit cube |
+| `rome.Mesh.sphere(segments=32, rings=20)` | UV sphere |
+| `rome.Mesh.plane()` | flat square facing up (+Y); scale it for a ground |
+| `rome.Mesh.load("assets/model.obj")` | OBJ or glTF 2.0 (`.glb` / `.gltf`) |
+
+`position` is world XYZ, `rotation` is Euler **radians** (applied Y→X→Z), `scale`
+is uniform, `color` is linear RGB in 0..1 (GPU only; the terminal is grayscale).
+
+### Lights (GPU backend)
+
+```python
+scene.lights = [
+    rome.Light.directional(direction=(-0.4, -0.9, 0.3), color=(1, 1, 1), intensity=0.8),
+    rome.Light.point(position=(2, 4, 3), color=(1, 0.9, 0.7), intensity=1.0, range=18),
+    rome.Light.spot(position=(0, 6, 0), direction=(0, -1, 0), inner_angle=20, outer_angle=30),
+]
+scene.ambient = 0.14      # constant fill
+scene.specular = 0.4      # highlight strength
+scene.shininess = 32.0    # highlight tightness
+```
+
+| Light | What it is |
+|---|---|
+| `directional` | a sun — a direction, no position, no falloff |
+| `point` | a bulb — a position, radiates all ways, distance falloff (`range`) |
+| `spot` | a cone — position + direction + `inner_angle`/`outer_angle` (degrees) |
+
+Up to 8 lights. The terminal (ASCII) backend ignores lights and uses its own
+fixed shading.
+
+## Player (`game/player.py`)
+
+An FPS free-look camera: WASD/arrows move on the ground plane, the mouse turns
+(yaw/pitch). `main.py` calls `app.set_mouse_look(True)` to capture the cursor on
+the GPU backend. Edit `Player.update(...)` to change how movement feels, or
+replace the class entirely for a different control scheme. Tune the start
+position, FOV, speed, and mouse sensitivity in `config/game.toml` under
+`[player]`.
 """
 
 _GITIGNORE = """\

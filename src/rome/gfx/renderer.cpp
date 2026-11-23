@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -33,18 +34,30 @@ constexpr std::uint32_t kMeshFragSpv[] =
 
 constexpr std::uint64_t kNoTimeout = std::numeric_limits<std::uint64_t>::max();
 
-// Matches the push_constant block in mesh.{vert,frag}. 192 bytes; within the
-// 256-byte push limit of the target GPUs. The light fields are the same for every
-// draw in a frame — carrying them in the push keeps the renderer free of
-// descriptor sets. A GPU capped at the 128-byte guaranteed minimum would need a
-// UBO instead.
+// Per-draw push constant: transform + albedo. 144 bytes. Lights live in a
+// per-frame UBO (below) so an arbitrary number of them fits.
 struct MeshPush {
     glm::mat4 mvp;
     glm::mat4 model;
-    glm::vec4 color;        // rgb albedo
-    glm::vec4 light_pos;    // xyz world position, w = ambient
-    glm::vec4 light_color;  // rgb colour, w = specular strength
-    glm::vec4 eye;          // xyz camera position, w = shininess
+    glm::vec4 color;
+};
+
+constexpr int kMaxLights = 8;
+
+// Matches the `Light` struct in mesh.frag (std140, 64 bytes each).
+struct GpuLight {
+    glm::vec4 position;   // xyz world, w = type (0 dir, 1 point, 2 spot)
+    glm::vec4 direction;  // xyz axis, w = range
+    glm::vec4 color;      // rgb, w = intensity
+    glm::vec4 cone;       // x = cos(inner), y = cos(outer)
+};
+
+// Matches the `Frame` UBO block in mesh.frag.
+struct FrameUbo {
+    glm::vec4 eye;       // xyz camera, w = ambient
+    glm::vec4 material;  // x = specular strength, y = shininess
+    glm::ivec4 counts;   // x = active light count
+    GpuLight lights[kMaxLights];
 };
 
 VkShaderModule create_shader_module(VkDevice device, const std::uint32_t* code,
@@ -93,6 +106,7 @@ Renderer::Renderer(Context& context, Swapchain& swapchain)
     create_frame_data();
     create_present_semaphores();
     create_depth_resources(swapchain_.extent());
+    create_descriptors();
     create_pipeline();
     create_mesh_pipeline();
 }
@@ -103,6 +117,7 @@ Renderer::~Renderer() {
     const VkDevice device = context_.device();
 
     destroy_meshes();
+    destroy_descriptors();
     destroy_depth_resources();
 
     if (mesh_pipeline_ != VK_NULL_HANDLE) {
@@ -245,6 +260,89 @@ void Renderer::destroy_meshes() {
     meshes_.clear();
 }
 
+void Renderer::create_descriptors() {
+    const VkDevice device = context_.device();
+    const VmaAllocator allocator = context_.allocator();
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layout_info{};
+    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_info.bindingCount = 1;
+    layout_info.pBindings = &binding;
+    ROME_VK_CHECK(vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &frame_set_layout_));
+
+    VkDescriptorPoolSize pool_size{};
+    pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_size.descriptorCount = static_cast<std::uint32_t>(kUboSlots);
+
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = static_cast<std::uint32_t>(kUboSlots);
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    ROME_VK_CHECK(vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pool_));
+
+    for (std::size_t i = 0; i < kUboSlots; ++i) {
+        VkBufferCreateInfo buf_info{};
+        buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buf_info.size = sizeof(FrameUbo);
+        buf_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo info{};
+        ROME_VK_CHECK(vmaCreateBuffer(allocator, &buf_info, &alloc, &frame_ubo_[i],
+                                      &frame_ubo_alloc_[i], &info));
+        frame_ubo_mapped_[i] = info.pMappedData;
+
+        VkDescriptorSetAllocateInfo set_alloc{};
+        set_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        set_alloc.descriptorPool = descriptor_pool_;
+        set_alloc.descriptorSetCount = 1;
+        set_alloc.pSetLayouts = &frame_set_layout_;
+        ROME_VK_CHECK(vkAllocateDescriptorSets(device, &set_alloc, &frame_sets_[i]));
+
+        VkDescriptorBufferInfo buffer_info{};
+        buffer_info.buffer = frame_ubo_[i];
+        buffer_info.offset = 0;
+        buffer_info.range = sizeof(FrameUbo);
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = frame_sets_[i];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write.pBufferInfo = &buffer_info;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+}
+
+void Renderer::destroy_descriptors() {
+    const VkDevice device = context_.device();
+    const VmaAllocator allocator = context_.allocator();
+    for (std::size_t i = 0; i < kUboSlots; ++i) {
+        if (frame_ubo_[i] != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, frame_ubo_[i], frame_ubo_alloc_[i]);
+            frame_ubo_[i] = VK_NULL_HANDLE;
+        }
+    }
+    if (descriptor_pool_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, descriptor_pool_, nullptr);  // also frees the sets
+        descriptor_pool_ = VK_NULL_HANDLE;
+    }
+    if (frame_set_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, frame_set_layout_, nullptr);
+        frame_set_layout_ = VK_NULL_HANDLE;
+    }
+}
+
 void Renderer::create_pipeline() {
     const VkDevice device = context_.device();
 
@@ -345,12 +443,14 @@ void Renderer::create_mesh_pipeline() {
     const VkDevice device = context_.device();
 
     VkPushConstantRange push_range{};
-    push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     push_range.offset = 0;
     push_range.size = sizeof(MeshPush);
 
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &frame_set_layout_;  // the per-frame light UBO
     layout_info.pushConstantRangeCount = 1;
     layout_info.pPushConstantRanges = &push_range;
     ROME_VK_CHECK(vkCreatePipelineLayout(device, &layout_info, nullptr, &mesh_layout_));
@@ -603,7 +703,8 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t image_index, Color clea
 }
 
 void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
-                            const CameraParams& camera, const Light& light,
+                            const CameraParams& camera, const std::vector<Light>& lights,
+                            const ShadingParams& shading,
                             const std::vector<MeshInstance>& instances) const {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -658,7 +759,7 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
     scissor.extent = VkExtent2D{extent.width, extent.height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    record_mesh_draws(cmd, extent.width, extent.height, camera, light, instances);
+    record_mesh_draws(cmd, extent.width, extent.height, camera, lights, shading, instances, frame_index_);
 
     vkCmdEndRendering(cmd);
 
@@ -669,8 +770,10 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
 }
 
 void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height,
-                                 const CameraParams& camera, const Light& light,
-                                 const std::vector<MeshInstance>& instances) const {
+                                 const CameraParams& camera, const std::vector<Light>& lights,
+                                 const ShadingParams& shading,
+                                 const std::vector<MeshInstance>& instances,
+                                 std::size_t ubo_slot) const {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipeline_);
 
     const glm::vec3 eye{camera.position[0], camera.position[1], camera.position[2]};
@@ -683,11 +786,26 @@ void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::
     proj[1][1] *= -1.0F;  // Vulkan clip space has +Y down relative to GLM's default
     const glm::mat4 view_proj = proj * view;
 
-    // Frame-constant lighting, packed to match the shader's push block.
-    const glm::vec4 light_pos{light.position[0], light.position[1], light.position[2],
-                              light.ambient};
-    const glm::vec4 light_color{light.color[0], light.color[1], light.color[2], light.specular};
-    const glm::vec4 eye_param{eye, light.shininess};
+    // Fill the per-frame light UBO for this slot, then bind it for the draws.
+    FrameUbo* ubo = static_cast<FrameUbo*>(frame_ubo_mapped_[ubo_slot]);
+    ubo->eye = glm::vec4(eye, shading.ambient);
+    ubo->material = glm::vec4(shading.specular, shading.shininess, 0.0F, 0.0F);
+    const int count = std::min(static_cast<int>(lights.size()), kMaxLights);
+    ubo->counts = glm::ivec4(count, 0, 0, 0);
+    for (int i = 0; i < count; ++i) {
+        const Light& lt = lights[static_cast<std::size_t>(i)];
+        glm::vec3 dir{lt.direction[0], lt.direction[1], lt.direction[2]};
+        const float dl = glm::length(dir);
+        dir = dl > 1e-6F ? dir / dl : glm::vec3(0.0F, -1.0F, 0.0F);
+        ubo->lights[i].position =
+            glm::vec4(lt.position[0], lt.position[1], lt.position[2], static_cast<float>(lt.type));
+        ubo->lights[i].direction = glm::vec4(dir, lt.range);
+        ubo->lights[i].color = glm::vec4(lt.color[0], lt.color[1], lt.color[2], lt.intensity);
+        ubo->lights[i].cone = glm::vec4(lt.inner_cos, lt.outer_cos, 0.0F, 0.0F);
+    }
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_layout_, 0, 1,
+                            &frame_sets_[ubo_slot], 0, nullptr);
 
     for (const MeshInstance& inst : instances) {
         const auto it = meshes_.find(inst.mesh);
@@ -708,12 +826,8 @@ void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::
         push.mvp = view_proj * model;
         push.model = model;
         push.color = glm::vec4(inst.color[0], inst.color[1], inst.color[2], 1.0F);
-        push.light_pos = light_pos;
-        push.light_color = light_color;
-        push.eye = eye_param;
-        vkCmdPushConstants(cmd, mesh_layout_,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                           sizeof(MeshPush), &push);
+        vkCmdPushConstants(cmd, mesh_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPush),
+                           &push);
 
         const VkBuffer vertex_buffer = it->second.vertex_buffer;
         const VkDeviceSize offset = 0;
@@ -725,7 +839,9 @@ void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::
 
 std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uint32_t width,
                                                      std::uint32_t height,
-                                                     const CameraParams& camera, const Light& light,
+                                                     const CameraParams& camera,
+                                                     const std::vector<Light>& lights,
+                                                     const ShadingParams& shading,
                                                      const std::vector<MeshInstance>& instances) {
     const VkDevice device = context_.device();
     const VmaAllocator allocator = context_.allocator();
@@ -860,7 +976,7 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
         scissor.extent = VkExtent2D{width, height};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        record_mesh_draws(cmd, width, height, camera, light, instances);
+        record_mesh_draws(cmd, width, height, camera, lights, shading, instances, kFramesInFlight);
 
         vkCmdEndRendering(cmd);
 
@@ -991,9 +1107,10 @@ bool Renderer::draw(Color clear_color, Extent2D window_extent) {
 }
 
 bool Renderer::draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
-                          const Light& light, const std::vector<MeshInstance>& instances) {
+                          const std::vector<Light>& lights, const ShadingParams& shading,
+                          const std::vector<MeshInstance>& instances) {
     return submit_and_present(window_extent, [&](VkCommandBuffer cmd, std::uint32_t image_index) {
-        record_scene(cmd, image_index, clear_color, camera, light, instances);
+        record_scene(cmd, image_index, clear_color, camera, lights, shading, instances);
     });
 }
 
