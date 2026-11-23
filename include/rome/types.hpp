@@ -25,6 +25,15 @@ struct Color {
     friend bool operator==(const Color&, const Color&) = default;
 };
 
+/// A point light plus the shading params for a frame. Linear RGB in 0..1.
+struct Light {
+    float position[3]{3.0F, 6.0F, -2.0F};
+    float color[3]{1.0F, 1.0F, 1.0F};
+    float ambient = 0.18F;    // constant fill so unlit faces aren't black
+    float specular = 0.4F;    // Blinn-Phong highlight strength
+    float shininess = 32.0F;  // highlight tightness
+};
+
 /// A free look-at camera for a frame. Plain data, so the public headers stay
 /// free of GLM; the matrices are built in the renderer.
 struct CameraParams {

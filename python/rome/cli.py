@@ -157,7 +157,7 @@ class Player:
 
     def _refresh(self) -> None:
         cp = math.cos(self.pitch)
-        fwd = (math.sin(self.yaw) * cp, math.sin(self.pitch), math.cos(self.yaw) * cp)
+        fwd = (-math.sin(self.yaw) * cp, math.sin(self.pitch), math.cos(self.yaw) * cp)
         self.camera = rome.Camera(
             position=(self.x, self.y, self.z),
             target=(self.x + fwd[0], self.y + fwd[1], self.z + fwd[2]),
@@ -176,8 +176,9 @@ class Player:
         self.pitch = max(-limit, min(limit, self.pitch))
 
         # Move on the ground plane: forward/back and strafe from the current yaw.
-        fx, fz = math.sin(self.yaw), math.cos(self.yaw)
-        rx, rz = math.cos(self.yaw), -math.sin(self.yaw)
+        # Right is world -X at yaw 0, matching the camera's screen-right.
+        fx, fz = -math.sin(self.yaw), math.cos(self.yaw)
+        rx, rz = -math.cos(self.yaw), -math.sin(self.yaw)
         forward = (1.0 if input.down("w") else 0.0) - (1.0 if input.down("s") else 0.0)
         strafe = (1.0 if input.down("d") else 0.0) - (1.0 if input.down("a") else 0.0)
         step = self.speed * dt

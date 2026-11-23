@@ -75,6 +75,11 @@ class VulkanBackend(Backend):
             cam_target=camera.target,
             up=camera.up,
             fov=camera.fov,
+            light_pos=scene.light_position,
+            light_color=scene.light_color,
+            ambient=scene.ambient,
+            specular=scene.specular,
+            shininess=scene.shininess,
         )
 
     def render_image(self, scene: Scene, camera: Camera, width: int, height: int) -> bytes:
@@ -90,6 +95,11 @@ class VulkanBackend(Backend):
             cam_target=camera.target,
             up=camera.up,
             fov=camera.fov,
+            light_pos=scene.light_position,
+            light_color=scene.light_color,
+            ambient=scene.ambient,
+            specular=scene.specular,
+            shininess=scene.shininess,
         )
 
     def set_title(self, text: str) -> None:

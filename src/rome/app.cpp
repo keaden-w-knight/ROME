@@ -83,7 +83,8 @@ std::uint64_t App::upload_mesh(const std::vector<float>& positions,
     return renderer_->upload_mesh(positions, normals, indices);
 }
 
-bool App::render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera) {
+bool App::render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera,
+                       const Light& light) {
     if (!window_.pump_events()) {
         return false;
     }
@@ -105,15 +106,15 @@ bool App::render_scene(const std::vector<MeshInstance>& instances, const CameraP
         renderer_->on_resize(size);
     }
 
-    renderer_->draw_scene(clear_color_, size, camera, instances);
+    renderer_->draw_scene(clear_color_, size, camera, light, instances);
     ++frame_count_;
     return true;
 }
 
 std::vector<std::uint8_t> App::render_to_image(std::uint32_t width, std::uint32_t height,
                                                const std::vector<MeshInstance>& instances,
-                                               const CameraParams& camera) {
-    return renderer_->render_offscreen(clear_color_, width, height, camera, instances);
+                                               const CameraParams& camera, const Light& light) {
+    return renderer_->render_offscreen(clear_color_, width, height, camera, light, instances);
 }
 
 std::vector<std::string> App::keys_held() const {

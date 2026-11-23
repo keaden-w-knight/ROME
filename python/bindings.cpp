@@ -53,6 +53,22 @@ rome::CameraParams make_camera(const std::tuple<float, float, float>& pos,
     return c;
 }
 
+rome::Light make_light(const std::tuple<float, float, float>& pos,
+                       const std::tuple<float, float, float>& color, float ambient, float specular,
+                       float shininess) {
+    rome::Light l{};
+    l.position[0] = std::get<0>(pos);
+    l.position[1] = std::get<1>(pos);
+    l.position[2] = std::get<2>(pos);
+    l.color[0] = std::get<0>(color);
+    l.color[1] = std::get<1>(color);
+    l.color[2] = std::get<2>(color);
+    l.ambient = ambient;
+    l.specular = specular;
+    l.shininess = shininess;
+    return l;
+}
+
 /// Parse a Python list of (handle, (x,y,z), (rx,ry,rz), scale) into instances.
 std::vector<rome::MeshInstance> parse_instances(const nb::list& instances) {
     std::vector<rome::MeshInstance> items;
@@ -132,30 +148,43 @@ NB_MODULE(_rome, m) {
             "render_scene",
             [](rome::App& self, nb::list instances, std::tuple<float, float, float> cam_pos,
                std::tuple<float, float, float> cam_target, std::tuple<float, float, float> up,
-               float fov) {
-                return self.render_scene(parse_instances(instances),
-                                         make_camera(cam_pos, cam_target, up, fov));
+               float fov, std::tuple<float, float, float> light_pos,
+               std::tuple<float, float, float> light_color, float ambient, float specular,
+               float shininess) {
+                return self.render_scene(
+                    parse_instances(instances), make_camera(cam_pos, cam_target, up, fov),
+                    make_light(light_pos, light_color, ambient, specular, shininess));
             },
             "instances"_a, "cam_pos"_a = std::make_tuple(0.0F, 0.0F, -5.0F),
             "cam_target"_a = std::make_tuple(0.0F, 0.0F, 0.0F),
             "up"_a = std::make_tuple(0.0F, 1.0F, 0.0F), "fov"_a = 50.0F,
+            "light_pos"_a = std::make_tuple(3.0F, 6.0F, -2.0F),
+            "light_color"_a = std::make_tuple(1.0F, 1.0F, 1.0F), "ambient"_a = 0.18F,
+            "specular"_a = 0.4F, "shininess"_a = 32.0F,
             "Draw one frame of a scene. instances is a list of "
-            "(handle, (x,y,z), (rx,ry,rz), scale). Returns False once the window closes.")
+            "(handle, (x,y,z), (rx,ry,rz), scale, (r,g,b)). Returns False once the window closes.")
 
         .def(
             "render_to_image",
             [](rome::App& self, nb::list instances, std::uint32_t width, std::uint32_t height,
                std::tuple<float, float, float> cam_pos, std::tuple<float, float, float> cam_target,
-               std::tuple<float, float, float> up, float fov) {
-                std::vector<std::uint8_t> pixels =
-                    self.render_to_image(width, height, parse_instances(instances),
-                                         make_camera(cam_pos, cam_target, up, fov));
+               std::tuple<float, float, float> up, float fov,
+               std::tuple<float, float, float> light_pos,
+               std::tuple<float, float, float> light_color, float ambient, float specular,
+               float shininess) {
+                std::vector<std::uint8_t> pixels = self.render_to_image(
+                    width, height, parse_instances(instances),
+                    make_camera(cam_pos, cam_target, up, fov),
+                    make_light(light_pos, light_color, ambient, specular, shininess));
                 return nb::bytes(reinterpret_cast<const char*>(pixels.data()), pixels.size());
             },
             "instances"_a, "width"_a, "height"_a,
             "cam_pos"_a = std::make_tuple(0.0F, 0.0F, -5.0F),
             "cam_target"_a = std::make_tuple(0.0F, 0.0F, 0.0F),
             "up"_a = std::make_tuple(0.0F, 1.0F, 0.0F), "fov"_a = 50.0F,
+            "light_pos"_a = std::make_tuple(3.0F, 6.0F, -2.0F),
+            "light_color"_a = std::make_tuple(1.0F, 1.0F, 1.0F), "ambient"_a = 0.18F,
+            "specular"_a = 0.4F, "shininess"_a = 32.0F,
             "Render a scene off-screen; returns width*height*4 RGBA8 bytes.")
 
         .def("set_title", &rome::App::set_title, "title"_a, "Set the window title text.")

@@ -33,13 +33,18 @@ constexpr std::uint32_t kMeshFragSpv[] =
 
 constexpr std::uint64_t kNoTimeout = std::numeric_limits<std::uint64_t>::max();
 
-// Matches the push_constant block in mesh.vert. 144 bytes; within the 256-byte
-// limit of the target GPUs (the Vulkan-guaranteed minimum is 128 — a GPU capped
-// there would need this moved into a UBO, which the lighting phase will add).
+// Matches the push_constant block in mesh.{vert,frag}. 192 bytes; within the
+// 256-byte push limit of the target GPUs. The light fields are the same for every
+// draw in a frame — carrying them in the push keeps the renderer free of
+// descriptor sets. A GPU capped at the 128-byte guaranteed minimum would need a
+// UBO instead.
 struct MeshPush {
     glm::mat4 mvp;
     glm::mat4 model;
-    glm::vec4 color;
+    glm::vec4 color;        // rgb albedo
+    glm::vec4 light_pos;    // xyz world position, w = ambient
+    glm::vec4 light_color;  // rgb colour, w = specular strength
+    glm::vec4 eye;          // xyz camera position, w = shininess
 };
 
 VkShaderModule create_shader_module(VkDevice device, const std::uint32_t* code,
@@ -340,7 +345,7 @@ void Renderer::create_mesh_pipeline() {
     const VkDevice device = context_.device();
 
     VkPushConstantRange push_range{};
-    push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     push_range.offset = 0;
     push_range.size = sizeof(MeshPush);
 
@@ -598,7 +603,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t image_index, Color clea
 }
 
 void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
-                            const CameraParams& camera,
+                            const CameraParams& camera, const Light& light,
                             const std::vector<MeshInstance>& instances) const {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -653,7 +658,7 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
     scissor.extent = VkExtent2D{extent.width, extent.height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    record_mesh_draws(cmd, extent.width, extent.height, camera, instances);
+    record_mesh_draws(cmd, extent.width, extent.height, camera, light, instances);
 
     vkCmdEndRendering(cmd);
 
@@ -664,7 +669,7 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
 }
 
 void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::uint32_t height,
-                                 const CameraParams& camera,
+                                 const CameraParams& camera, const Light& light,
                                  const std::vector<MeshInstance>& instances) const {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipeline_);
 
@@ -677,6 +682,12 @@ void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::
     glm::mat4 proj = glm::perspective(glm::radians(camera.fov_deg), aspect, 0.1F, 100.0F);
     proj[1][1] *= -1.0F;  // Vulkan clip space has +Y down relative to GLM's default
     const glm::mat4 view_proj = proj * view;
+
+    // Frame-constant lighting, packed to match the shader's push block.
+    const glm::vec4 light_pos{light.position[0], light.position[1], light.position[2],
+                              light.ambient};
+    const glm::vec4 light_color{light.color[0], light.color[1], light.color[2], light.specular};
+    const glm::vec4 eye_param{eye, light.shininess};
 
     for (const MeshInstance& inst : instances) {
         const auto it = meshes_.find(inst.mesh);
@@ -697,8 +708,12 @@ void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::
         push.mvp = view_proj * model;
         push.model = model;
         push.color = glm::vec4(inst.color[0], inst.color[1], inst.color[2], 1.0F);
-        vkCmdPushConstants(cmd, mesh_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPush),
-                           &push);
+        push.light_pos = light_pos;
+        push.light_color = light_color;
+        push.eye = eye_param;
+        vkCmdPushConstants(cmd, mesh_layout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(MeshPush), &push);
 
         const VkBuffer vertex_buffer = it->second.vertex_buffer;
         const VkDeviceSize offset = 0;
@@ -710,7 +725,7 @@ void Renderer::record_mesh_draws(VkCommandBuffer cmd, std::uint32_t width, std::
 
 std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uint32_t width,
                                                      std::uint32_t height,
-                                                     const CameraParams& camera,
+                                                     const CameraParams& camera, const Light& light,
                                                      const std::vector<MeshInstance>& instances) {
     const VkDevice device = context_.device();
     const VmaAllocator allocator = context_.allocator();
@@ -845,7 +860,7 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
         scissor.extent = VkExtent2D{width, height};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        record_mesh_draws(cmd, width, height, camera, instances);
+        record_mesh_draws(cmd, width, height, camera, light, instances);
 
         vkCmdEndRendering(cmd);
 
@@ -976,9 +991,9 @@ bool Renderer::draw(Color clear_color, Extent2D window_extent) {
 }
 
 bool Renderer::draw_scene(Color clear_color, Extent2D window_extent, const CameraParams& camera,
-                          const std::vector<MeshInstance>& instances) {
+                          const Light& light, const std::vector<MeshInstance>& instances) {
     return submit_and_present(window_extent, [&](VkCommandBuffer cmd, std::uint32_t image_index) {
-        record_scene(cmd, image_index, clear_color, camera, instances);
+        record_scene(cmd, image_index, clear_color, camera, light, instances);
     });
 }
 

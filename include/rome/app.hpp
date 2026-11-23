@@ -57,13 +57,14 @@ public:
     /// Processes events and draws one frame of a scene: each instance's mesh,
     /// lit and depth-tested, seen through `camera`. Returns false once the window
     /// has been closed, so it reads as a while condition like tick().
-    bool render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera);
+    bool render_scene(const std::vector<MeshInstance>& instances, const CameraParams& camera,
+                      const Light& light);
 
     /// Renders a scene to an off-screen image (no window needed) and returns its
     /// pixels as RGBA8, width*height*4 bytes, top row first.
     std::vector<std::uint8_t> render_to_image(std::uint32_t width, std::uint32_t height,
                                               const std::vector<MeshInstance>& instances,
-                                              const CameraParams& camera);
+                                              const CameraParams& camera, const Light& light);
 
     /// Set the window title (e.g. an FPS readout).
     void set_title(const std::string& title) {

@@ -58,7 +58,12 @@ class Node:
 @dataclass
 class Scene:
     nodes: list[Node] = field(default_factory=list)
-    light_direction: Vec3 = (-0.5, 0.8, -1.0)
+    # A point light (GPU backends; the ASCII backend uses its own fixed shading).
+    light_position: Vec3 = (3.0, 6.0, -2.0)
+    light_color: Vec3 = (1.0, 1.0, 1.0)
+    ambient: float = 0.18
+    specular: float = 0.4
+    shininess: float = 32.0
 
     def add(
         self,

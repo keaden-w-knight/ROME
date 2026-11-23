@@ -1,21 +1,36 @@
 #version 450
 
+layout(push_constant) uniform Push {
+    mat4 mvp;
+    mat4 model;
+    vec4 color;        // rgb albedo
+    vec4 light_pos;    // xyz world position, w = ambient
+    vec4 light_color;  // rgb colour,        w = specular strength
+    vec4 eye;          // xyz camera position, w = shininess
+} pc;
+
 layout(location = 0) in vec3 v_normal;
 layout(location = 1) in vec3 v_color;
+layout(location = 2) in vec3 v_worldpos;
 layout(location = 0) out vec4 out_color;
-
-// Lighting: a key light, a dimmer fill from the other side to lift shadowed
-// faces, and ambient. The albedo is the per-instance colour. The roadmap's
-// lighting phase replaces the fixed lights with a positioned light.
-const vec3 KEY_DIR = normalize(vec3(-0.5, 0.8, -1.0));
-const vec3 FILL_DIR = normalize(vec3(0.6, 0.35, 0.8));
-const float AMBIENT = 0.22;
-const float FILL = 0.35;
 
 void main() {
     vec3 n = normalize(v_normal);
-    float key = max(dot(n, KEY_DIR), 0.0);
-    float fill = max(dot(n, FILL_DIR), 0.0) * FILL;
-    float light = AMBIENT + key + fill;
-    out_color = vec4(min(v_color * light, vec3(1.0)), 1.0);
+
+    // Point light with gentle distance attenuation.
+    vec3 to_light = pc.light_pos.xyz - v_worldpos;
+    float dist = length(to_light);
+    vec3 l = to_light / max(dist, 1e-4);
+    float atten = 1.0 / (1.0 + 0.02 * dist + 0.008 * dist * dist);
+
+    float diffuse = max(dot(n, l), 0.0) * atten;
+
+    // Blinn-Phong specular — view-dependent, so the highlight tracks the camera.
+    vec3 view = normalize(pc.eye.xyz - v_worldpos);
+    vec3 half_vec = normalize(l + view);
+    float spec = pow(max(dot(n, half_vec), 0.0), max(pc.eye.w, 1.0)) * pc.light_color.w * atten;
+
+    float ambient = pc.light_pos.w;
+    vec3 lit = v_color * (ambient + diffuse * pc.light_color.rgb) + pc.light_color.rgb * spec;
+    out_color = vec4(min(lit, vec3(1.0)), 1.0);
 }
