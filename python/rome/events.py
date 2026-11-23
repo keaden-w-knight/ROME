@@ -38,31 +38,46 @@ class Event:
     dy: float = 0.0
 
 
-Listener = Callable[[Event], None]
+Listener = Callable[..., None]
+
+#: sentinel meaning "no explicit `this` was given" (distinct from this=None)
+_NO_THIS = object()
 
 
 class Events:
-    """A tiny event dispatcher: register listeners per type, emit events to them."""
+    """A tiny event dispatcher: register listeners per type, emit events to them.
+
+    Modelled on JS ``addEventListener``: a listener is called with the event. If
+    you pass a second value to ``on`` it's handed to the listener as a second
+    argument (a "this"/context), so a lambda can carry state without a closure::
+
+        events.on("key_down", lambda e: e.app.close())            # event only
+        events.on("key_down", lambda e, player: player.jump(), player)  # + "this"
+    """
 
     def __init__(self) -> None:
-        self._listeners: dict[str, list[Listener]] = {}
+        self._listeners: dict[str, list[tuple[Listener, object]]] = {}
 
-    def on(self, event_type: str, callback: Listener | None = None):
-        """Register a listener. Usable directly — ``events.on("key_down", fn)`` —
-        or as a decorator — ``@events.on("key_down")``."""
+    def on(self, event_type: str, callback: Listener | None = None, this: object = _NO_THIS):
+        """Register a listener. Direct — ``events.on("key_down", fn)`` — or as a
+        decorator — ``@events.on("key_down")``. If ``this`` is given, the listener
+        is called as ``fn(event, this)``; otherwise ``fn(event)``."""
         if callback is None:
             def decorator(fn: Listener) -> Listener:
-                self._listeners.setdefault(event_type, []).append(fn)
+                self._listeners.setdefault(event_type, []).append((fn, this))
                 return fn
             return decorator
-        self._listeners.setdefault(event_type, []).append(callback)
+        self._listeners.setdefault(event_type, []).append((callback, this))
         return callback
 
     def off(self, event_type: str, callback: Listener) -> None:
         listeners = self._listeners.get(event_type)
-        if listeners and callback in listeners:
-            listeners.remove(callback)
+        if listeners:
+            self._listeners[event_type] = [(cb, t) for cb, t in listeners if cb is not callback]
 
     def emit(self, event: Event) -> None:
-        for callback in self._listeners.get(event.type, ()):
-            callback(event)
+        for callback, this in self._listeners.get(event.type, ()):
+            if this is _NO_THIS:
+                callback(event)
+            else:
+                callback(event, this)

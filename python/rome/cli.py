@@ -100,6 +100,12 @@ def main() -> None:
                 marker.append(event.app.hud.add(rome.Mesh.sphere(), x=0.5, y=0.08, size=0.04,
                                                 color=(1.0, 0.9, 0.3)))
 
+    # A one-line lambda listener with a bound "this" (the player, passed as the
+    # 3rd arg): press F to toggle sprint. No named function needed.
+    app.on("key_down",
+           lambda e, p: (setattr(p, "speed", 8.0 if p.speed < 6 else 4.0) if e.key == "f" else None),
+           player)
+
     app.run(update)
 
 
@@ -349,7 +355,17 @@ def on_key(event):
         ...  # event.app gives you the scene, camera, hud, player, etc.
 ```
 
-Or imperatively: `app.on("update", my_func)` / `app.events.off("update", my_func)`.
+Listeners are just callables — a **lambda** works, no named function needed.
+Modelled on JS `addEventListener`: the listener gets the **event** by default, and
+if you pass a value as the 3rd argument to `on(...)` it's handed to the listener
+as a second parameter (a "this"/context), so a lambda can carry state inline:
+
+```python
+app.on("key_down", lambda e: e.app.close())                 # event only
+app.on("key_down", lambda e, player: player.jump(), player)  # event + "this"
+```
+
+Remove a listener with `app.events.off("update", fn)`.
 
 ## Built-in event types
 

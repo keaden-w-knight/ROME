@@ -19,7 +19,7 @@ from typing import Callable
 
 from .backends import DEFAULT_BACKEND, BackendConfig, create_backend
 from .camera import Camera
-from .events import Event, Events
+from .events import _NO_THIS, Event, Events
 from .input import InputState
 from .scene import Hud, Scene
 
@@ -73,10 +73,11 @@ class App:
     def info(self) -> str:
         return self._backend.info()
 
-    def on(self, event_type: str, callback=None):
+    def on(self, event_type: str, callback=None, this=_NO_THIS):
         """Register an event listener (see rome.events). Convenience for
-        ``app.events.on(...)``; works as a decorator too."""
-        return self.events.on(event_type, callback)
+        ``app.events.on(...)``; works as a decorator too. Pass ``this`` to hand the
+        listener a second argument (a context), so a lambda can stay a one-liner."""
+        return self.events.on(event_type, callback, this)
 
     def tick(self) -> bool:
         """Advance time, poll input, and fire events. Returns whether the app is
