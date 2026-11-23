@@ -93,6 +93,10 @@ private:
     void destroy_depth_resources();
     void destroy_meshes();
 
+    // Highest sample count the device supports for both colour and depth, capped
+    // at 4x (a good quality/bandwidth balance). VK_SAMPLE_COUNT_1_BIT = no MSAA.
+    [[nodiscard]] VkSampleCountFlagBits pick_msaa_samples() const;
+
     void record(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color) const;
     void record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Color clear_color,
                       const CameraParams& camera, const std::vector<Light>& lights,
@@ -151,6 +155,17 @@ private:
     VkImage depth_image_ = VK_NULL_HANDLE;
     VmaAllocation depth_alloc_ = VK_NULL_HANDLE;
     VkImageView depth_view_ = VK_NULL_HANDLE;
+
+    // Multisampling. The mesh pipeline rasterises into these multisample colour /
+    // depth targets and resolves the colour into the swapchain (or off-screen)
+    // image. Chosen from device limits in the constructor; when it is
+    // VK_SAMPLE_COUNT_1_BIT, MSAA is off and draws go straight to the target.
+    // The multisample colour image (depth is the member above) lives here for the
+    // windowed path and is recreated on resize; the off-screen path makes its own.
+    VkSampleCountFlagBits msaa_samples_ = VK_SAMPLE_COUNT_1_BIT;
+    VkImage msaa_color_image_ = VK_NULL_HANDLE;
+    VmaAllocation msaa_color_alloc_ = VK_NULL_HANDLE;
+    VkImageView msaa_color_view_ = VK_NULL_HANDLE;
 
     std::unordered_map<std::uint64_t, GpuMesh> meshes_;
     std::uint64_t next_mesh_id_ = 1;

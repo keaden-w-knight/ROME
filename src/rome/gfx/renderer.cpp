@@ -103,6 +103,7 @@ void transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout from, Vk
 
 Renderer::Renderer(Context& context, Swapchain& swapchain)
     : context_(context), swapchain_(swapchain) {
+    msaa_samples_ = pick_msaa_samples();  // before depth resources and pipelines
     create_frame_data();
     create_present_semaphores();
     create_depth_resources(swapchain_.extent());
@@ -199,6 +200,21 @@ void Renderer::destroy_present_semaphores() {
     render_finished_.clear();
 }
 
+VkSampleCountFlagBits Renderer::pick_msaa_samples() const {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(context_.physical_device(), &props);
+    // Both colour and depth attachments must support the count we pick.
+    const VkSampleCountFlags counts =
+        props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
+    if (counts & VK_SAMPLE_COUNT_4_BIT) {
+        return VK_SAMPLE_COUNT_4_BIT;
+    }
+    if (counts & VK_SAMPLE_COUNT_2_BIT) {
+        return VK_SAMPLE_COUNT_2_BIT;
+    }
+    return VK_SAMPLE_COUNT_1_BIT;  // no MSAA support: render straight to the target
+}
+
 void Renderer::create_depth_resources(Extent2D extent) {
     destroy_depth_resources();
     if (extent.is_empty()) {
@@ -212,7 +228,7 @@ void Renderer::create_depth_resources(Extent2D extent) {
     image_info.extent = VkExtent3D{extent.width, extent.height, 1};
     image_info.mipLevels = 1;
     image_info.arrayLayers = 1;
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.samples = msaa_samples_;  // depth matches the colour sample count
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
     image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -232,10 +248,48 @@ void Renderer::create_depth_resources(Extent2D extent) {
     view_info.subresourceRange.levelCount = 1;
     view_info.subresourceRange.layerCount = 1;
     ROME_VK_CHECK(vkCreateImageView(context_.device(), &view_info, nullptr, &depth_view_));
+
+    // Multisample colour target for the windowed path (the scene resolves from it
+    // into the swapchain image). Only needed when MSAA is on.
+    if (msaa_samples_ != VK_SAMPLE_COUNT_1_BIT) {
+        VkImageCreateInfo color_info{};
+        color_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        color_info.imageType = VK_IMAGE_TYPE_2D;
+        color_info.format = swapchain_.format();
+        color_info.extent = VkExtent3D{extent.width, extent.height, 1};
+        color_info.mipLevels = 1;
+        color_info.arrayLayers = 1;
+        color_info.samples = msaa_samples_;
+        color_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        color_info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        color_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        ROME_VK_CHECK(vmaCreateImage(context_.allocator(), &color_info, &alloc_info,
+                                     &msaa_color_image_, &msaa_color_alloc_, nullptr));
+
+        VkImageViewCreateInfo color_view_info{};
+        color_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        color_view_info.image = msaa_color_image_;
+        color_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        color_view_info.format = swapchain_.format();
+        color_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        color_view_info.subresourceRange.levelCount = 1;
+        color_view_info.subresourceRange.layerCount = 1;
+        ROME_VK_CHECK(
+            vkCreateImageView(context_.device(), &color_view_info, nullptr, &msaa_color_view_));
+    }
 }
 
 void Renderer::destroy_depth_resources() {
     const VkDevice device = context_.device();
+    if (msaa_color_view_ != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, msaa_color_view_, nullptr);
+        msaa_color_view_ = VK_NULL_HANDLE;
+    }
+    if (msaa_color_image_ != VK_NULL_HANDLE) {
+        vmaDestroyImage(context_.allocator(), msaa_color_image_, msaa_color_alloc_);
+        msaa_color_image_ = VK_NULL_HANDLE;
+        msaa_color_alloc_ = VK_NULL_HANDLE;
+    }
     if (depth_view_ != VK_NULL_HANDLE) {
         vkDestroyImageView(device, depth_view_, nullptr);
         depth_view_ = VK_NULL_HANDLE;
@@ -522,7 +576,7 @@ void Renderer::create_mesh_pipeline() {
 
     VkPipelineMultisampleStateCreateInfo multisample{};
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = msaa_samples_;  // MSAA: edges resolved on store
     multisample.minSampleShading = 1.0F;
 
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
@@ -766,15 +820,23 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
 
     const VkImage image = swapchain_.images()[image_index];
     const Extent2D extent = swapchain_.extent();
+    const bool msaa = msaa_samples_ != VK_SAMPLE_COUNT_1_BIT;
+    const VkImageView target_view = swapchain_.image_views()[image_index];
 
+    // The swapchain image is the final single-sample target: the resolve
+    // destination under MSAA, or drawn into directly without it.
     transition_image(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     transition_image(cmd, depth_image_, VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (msaa) {
+        transition_image(cmd, msaa_color_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    }
 
     VkRenderingAttachmentInfo color_attachment{};
     color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color_attachment.imageView = swapchain_.image_views()[image_index];
+    color_attachment.imageView = msaa ? msaa_color_view_ : target_view;
     color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -782,6 +844,13 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
     color_attachment.clearValue.color.float32[1] = clear_color.g;
     color_attachment.clearValue.color.float32[2] = clear_color.b;
     color_attachment.clearValue.color.float32[3] = clear_color.a;
+    // Resolve on the last colour pass. With no HUD that is this one; otherwise the
+    // HUD pass resolves and this pass just stores the multisample colour.
+    if (msaa && hud.empty()) {
+        color_attachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        color_attachment.resolveImageView = target_view;
+        color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
 
     VkRenderingAttachmentInfo depth_attachment{};
     depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -819,9 +888,14 @@ void Renderer::record_scene(VkCommandBuffer cmd, std::uint32_t image_index, Colo
 
     if (!hud.empty()) {
         // HUD pass: keep the 3D colour (LOAD), clear depth so the overlay is
-        // always on top.
+        // always on top. Under MSAA this is the pass that resolves to the target.
         VkRenderingAttachmentInfo hud_color = color_attachment;
         hud_color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        if (msaa) {
+            hud_color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            hud_color.resolveImageView = target_view;
+            hud_color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
         VkRenderingInfo hud_rendering = rendering;
         hud_rendering.pColorAttachments = &hud_color;
         vkCmdBeginRendering(cmd, &hud_rendering);
@@ -960,7 +1034,7 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
         info.extent = VkExtent3D{width, height, 1};
         info.mipLevels = 1;
         info.arrayLayers = 1;
-        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.samples = msaa_samples_;  // matches the colour sample count
         info.tiling = VK_IMAGE_TILING_OPTIMAL;
         info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -978,6 +1052,39 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
         view_info.subresourceRange.levelCount = 1;
         view_info.subresourceRange.layerCount = 1;
         ROME_VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &depth_view));
+    }
+
+    // Multisample colour target, resolved into color_image. Only under MSAA.
+    const bool msaa = msaa_samples_ != VK_SAMPLE_COUNT_1_BIT;
+    VkImage msaa_color = VK_NULL_HANDLE;
+    VmaAllocation msaa_alloc = VK_NULL_HANDLE;
+    VkImageView msaa_view = VK_NULL_HANDLE;
+    if (msaa) {
+        VkImageCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        info.imageType = VK_IMAGE_TYPE_2D;
+        info.format = color_format;
+        info.extent = VkExtent3D{width, height, 1};
+        info.mipLevels = 1;
+        info.arrayLayers = 1;
+        info.samples = msaa_samples_;
+        info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo alloc{};
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        ROME_VK_CHECK(vmaCreateImage(allocator, &info, &alloc, &msaa_color, &msaa_alloc, nullptr));
+
+        VkImageViewCreateInfo view_info{};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = msaa_color;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = color_format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+        ROME_VK_CHECK(vkCreateImageView(device, &view_info, nullptr, &msaa_view));
     }
 
     // Host-visible buffer to copy the rendered image into.
@@ -1000,14 +1107,19 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
     }
 
     context_.immediate_submit([&](VkCommandBuffer cmd) {
+        // color_image is the single-sample resolve destination / readback source.
         transition_image(cmd, color_image, VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         transition_image(cmd, depth_image, VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+        if (msaa) {
+            transition_image(cmd, msaa_color, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        }
 
         VkRenderingAttachmentInfo color_attachment{};
         color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        color_attachment.imageView = color_view;
+        color_attachment.imageView = msaa ? msaa_view : color_view;
         color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -1015,6 +1127,11 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
         color_attachment.clearValue.color.float32[1] = clear_color.g;
         color_attachment.clearValue.color.float32[2] = clear_color.b;
         color_attachment.clearValue.color.float32[3] = clear_color.a;
+        if (msaa && hud.empty()) {
+            color_attachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            color_attachment.resolveImageView = color_view;
+            color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
 
         VkRenderingAttachmentInfo depth_attachment{};
         depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1053,6 +1170,11 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
         if (!hud.empty()) {
             VkRenderingAttachmentInfo hud_color = color_attachment;
             hud_color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            if (msaa) {
+                hud_color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+                hud_color.resolveImageView = color_view;
+                hud_color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
             VkRenderingInfo hud_rendering = rendering;
             hud_rendering.pColorAttachments = &hud_color;
             vkCmdBeginRendering(cmd, &hud_rendering);
@@ -1087,6 +1209,10 @@ std::vector<std::uint8_t> Renderer::render_offscreen(Color clear_color, std::uin
     }
 
     vmaDestroyBuffer(allocator, readback, readback_alloc);
+    if (msaa_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, msaa_view, nullptr);
+        vmaDestroyImage(allocator, msaa_color, msaa_alloc);
+    }
     vkDestroyImageView(device, depth_view, nullptr);
     vmaDestroyImage(allocator, depth_image, depth_alloc);
     vkDestroyImageView(device, color_view, nullptr);
