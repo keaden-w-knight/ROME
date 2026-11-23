@@ -286,6 +286,7 @@ Built-in meshes, plus files:
 | `rome.Mesh.sphere(segments=32, rings=20)` | UV sphere |
 | `rome.Mesh.plane()` | flat square facing up (+Y); scale it for a ground |
 | `rome.Mesh.load("assets/model.obj")` | OBJ or glTF 2.0 (`.glb` / `.gltf`) |
+| `rome.Mesh.from_arrays(positions, normals=None, indices=None)` | geometry you built yourself — numpy arrays or lists, flat or per-vertex; normals/indices optional |
 
 `position` is world XYZ, `rotation` is Euler **radians** (applied Y→X→Z), `scale`
 is uniform, `color` is linear RGB in 0..1 (GPU only; the terminal is grayscale).

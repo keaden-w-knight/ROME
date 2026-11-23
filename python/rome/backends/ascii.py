@@ -57,18 +57,7 @@ class AsciiBackend(Backend):
             return cached
         from .. import geometry
 
-        if mesh.kind == "sphere":
-            geo = geometry.sphere(mesh.segments, mesh.rings)
-        elif mesh.kind == "cube":
-            geo = geometry.cube()
-        elif mesh.kind == "plane":
-            geo = geometry.plane()
-        elif mesh.kind == "obj":
-            geo = geometry.load_obj(mesh.path)
-        elif mesh.kind == "gltf":
-            geo = geometry.load_gltf(mesh.path)
-        else:
-            raise ValueError(f"unknown mesh kind {mesh.kind!r}")
+        geo = geometry.from_mesh(mesh)
         native = self._ta.Mesh.from_arrays(geo.positions, geo.normals, geo.indices)
         self._cache[id(mesh)] = native
         return native

@@ -40,18 +40,7 @@ class VulkanBackend(Backend):
         handle = self._cache.get(id(mesh))
         if handle is not None:
             return handle
-        if mesh.kind == "sphere":
-            geo = geometry.sphere(mesh.segments, mesh.rings)
-        elif mesh.kind == "cube":
-            geo = geometry.cube()
-        elif mesh.kind == "plane":
-            geo = geometry.plane()
-        elif mesh.kind == "obj":
-            geo = geometry.load_obj(mesh.path)
-        elif mesh.kind == "gltf":
-            geo = geometry.load_gltf(mesh.path)
-        else:
-            raise ValueError(f"unknown mesh kind {mesh.kind!r}")
+        geo = geometry.from_mesh(mesh)
         handle = self._app.upload_mesh(geo.positions, geo.normals, geo.indices)
         self._cache[id(mesh)] = handle
         return handle

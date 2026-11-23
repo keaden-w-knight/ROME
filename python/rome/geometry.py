@@ -28,6 +28,78 @@ class Geometry:
     indices: list[int]  # triangle list
 
 
+def from_mesh(mesh) -> Geometry:
+    """Turn a framework ``rome.scene.Mesh`` into flat arrays. The single place the
+    mesh *kind* is mapped to geometry, so both backends draw the same thing."""
+    kind = mesh.kind
+    if kind == "sphere":
+        return sphere(mesh.segments, mesh.rings)
+    if kind == "cube":
+        return cube()
+    if kind == "plane":
+        return plane()
+    if kind == "obj":
+        return load_obj(mesh.path)
+    if kind == "gltf":
+        return load_gltf(mesh.path)
+    if kind == "arrays":
+        return from_arrays(mesh.positions, mesh.normals, mesh.indices)
+    raise ValueError(f"unknown mesh kind {kind!r}")
+
+
+def _flat(seq) -> list:
+    """Flatten a positions/normals/indices argument to a flat Python list.
+
+    Accepts a flat sequence ``[x, y, z, ...]``, a sequence of tuples
+    ``[(x, y, z), ...]``, or a numpy array of any shape — so numpy meshes drop in
+    without a hard numpy dependency here."""
+    if hasattr(seq, "reshape") and hasattr(seq, "tolist"):  # numpy ndarray
+        return seq.reshape(-1).tolist()
+    out: list = []
+    for x in seq:
+        if isinstance(x, (list, tuple)):
+            out.extend(x)
+        else:
+            out.append(x)
+    return out
+
+
+def from_arrays(positions, normals=None, indices=None) -> Geometry:
+    """Build geometry from caller-supplied vertex arrays — numpy arrays or plain
+    lists, flat (``[x, y, z, ...]``) or per-vertex (``[(x, y, z), ...]``).
+
+    ``indices`` may be omitted for a triangle soup (vertices taken three at a
+    time); ``normals`` may be omitted and smooth per-vertex normals are computed.
+    Coordinates are kept as given — unlike the file loaders, this does not recentre
+    or rescale, because the caller placed these vertices deliberately."""
+    pos = [float(x) for x in _flat(positions)]
+    if len(pos) % 3:
+        raise ValueError("positions length must be a multiple of 3")
+    nverts = len(pos) // 3
+    verts = [(pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]) for i in range(nverts)]
+
+    if indices is None:
+        idx = list(range(nverts))
+    else:
+        idx = [int(i) for i in _flat(indices)]
+    if len(idx) % 3:
+        raise ValueError("indices length must be a multiple of 3")
+    tris = [(idx[k], idx[k + 1], idx[k + 2]) for k in range(0, len(idx), 3)]
+
+    if normals is None:
+        norms = _vertex_normals(verts, tris)
+    else:
+        nrm = [float(x) for x in _flat(normals)]
+        if len(nrm) != len(pos):
+            raise ValueError("normals must have the same length as positions")
+        norms = [(nrm[3 * i], nrm[3 * i + 1], nrm[3 * i + 2]) for i in range(nverts)]
+
+    flat_normals: list[float] = []
+    for n in norms:
+        flat_normals.extend(n)
+    return Geometry(positions=pos, normals=flat_normals, indices=idx)
+
+
 def cube() -> Geometry:
     # Each face gets its own four vertices carrying the face normal, so edges
     # stay crisp (shared vertices with averaged normals would round them off).

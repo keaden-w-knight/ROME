@@ -8,6 +8,7 @@ into its own native form, so one game's scene renders through any backend.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 Vec3 = tuple[float, float, float]
 
@@ -17,10 +18,13 @@ class Mesh:
     """A backend-agnostic mesh *description*. A backend realises it into its own
     native mesh (GPU buffers, ASCII triangles, …) and caches that by identity."""
 
-    kind: str  # "sphere" | "cube" | "obj"
+    kind: str  # "sphere" | "cube" | "plane" | "obj" | "gltf" | "arrays"
     path: str | None = None
     segments: int = 32
     rings: int = 20
+    positions: Any = None  # kind="arrays": vertex xyz (numpy array or list)
+    normals: Any = None  # kind="arrays": optional, computed when omitted
+    indices: Any = None  # kind="arrays": optional, triangle soup when omitted
 
     @staticmethod
     def sphere(segments: int = 32, rings: int = 20) -> "Mesh":
@@ -34,6 +38,15 @@ class Mesh:
     def plane() -> "Mesh":
         """A flat square facing up (+Y). Scale it for a ground."""
         return Mesh(kind="plane")
+
+    @staticmethod
+    def from_arrays(positions, normals=None, indices=None) -> "Mesh":
+        """A mesh from raw vertex arrays — numpy arrays or plain lists, flat
+        (``[x, y, z, ...]``) or per-vertex (``[(x, y, z), ...]``). ``indices`` may
+        be omitted for a triangle soup; ``normals`` may be omitted and are computed.
+        Lets a game feed geometry it built itself (e.g. with numpy) to either
+        backend."""
+        return Mesh(kind="arrays", positions=positions, normals=normals, indices=indices)
 
     @staticmethod
     def load(path: str) -> "Mesh":

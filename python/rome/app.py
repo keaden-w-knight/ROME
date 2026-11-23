@@ -112,6 +112,20 @@ class App:
         supports it. Pair with rome.save_png."""
         return self._backend.render_image(self.scene, self.camera, width, height, self.hud)
 
+    def render_array(self, width: int = 1280, height: int = 720):
+        """Render off-screen and return the frame as a numpy ``(height, width, 4)``
+        uint8 RGBA array — handy for notebooks, tests, and feeding other imaging
+        tools. Requires numpy (only when called). The array is a view over the
+        rendered bytes; copy it if you need to keep it past the next render."""
+        try:
+            import numpy as np
+        except ImportError as e:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "render_array needs numpy installed; use render_image for raw bytes."
+            ) from e
+        data = self.render_image(width, height)
+        return np.frombuffer(data, dtype=np.uint8).reshape(height, width, 4)
+
     def run(self, update: Callable[["App"], None] | None = None) -> None:
         """Drive the loop to completion. `update(app)` runs each frame before the
         draw — move the camera, step the world, read `app.input`, `app.dt`."""
