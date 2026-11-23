@@ -19,6 +19,7 @@ from typing import Callable
 
 from .backends import DEFAULT_BACKEND, BackendConfig, create_backend
 from .camera import Camera
+from .events import Event, Events
 from .input import InputState
 from .scene import Hud, Scene
 
@@ -44,7 +45,9 @@ class App:
             backend,
             BackendConfig(width=width, height=height, title=title, clear_color=clear_color, vsync=vsync),
         )
+        self.events = Events()  # register listeners with app.on(type, fn)
         self.input = InputState.empty()
+        self._prev_held: frozenset = frozenset()
         self._last = time.perf_counter()
         self.dt = 0.0
         self._closed = False
@@ -70,14 +73,33 @@ class App:
     def info(self) -> str:
         return self._backend.info()
 
+    def on(self, event_type: str, callback=None):
+        """Register an event listener (see rome.events). Convenience for
+        ``app.events.on(...)``; works as a decorator too."""
+        return self.events.on(event_type, callback)
+
     def tick(self) -> bool:
-        """Advance time and poll input. Returns whether the app is still running
-        (so it reads naturally as a `while app.tick():` condition). Does not draw."""
+        """Advance time, poll input, and fire events. Returns whether the app is
+        still running (so it reads as a `while app.tick():` condition). No draw."""
         now = time.perf_counter()
         self.dt = now - self._last
         self._last = now
         self.input = self._backend.poll_input()
+        self._dispatch_events()
         return self.running
+
+    def _dispatch_events(self) -> None:
+        inp = self.input
+        for key in inp.pressed:
+            self.events.emit(Event("key_down", app=self, input=inp, key=key))
+        for key in self._prev_held - inp.held:
+            self.events.emit(Event("key_up", app=self, input=inp, key=key))
+        self._prev_held = inp.held
+        if inp.mouse_dx or inp.mouse_dy:
+            self.events.emit(
+                Event("mouse_move", app=self, input=inp, dx=inp.mouse_dx, dy=inp.mouse_dy)
+            )
+        self.events.emit(Event("update", app=self, input=inp, dt=self.dt))
 
     def draw(self) -> None:
         """Render the current scene from the current camera."""
@@ -104,6 +126,7 @@ class App:
 
     def close(self) -> None:
         if not self._closed:
+            self.events.emit(Event("quit", app=self, input=self.input))
             self._closed = True
             self._backend.close()
 

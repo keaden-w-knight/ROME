@@ -87,6 +87,19 @@ def main() -> None:
             stats["time"] = 0.0
             stats["frames"] = 0
 
+    # Example event listener — press Space to toggle a HUD marker. Add your own
+    # (custom keys, triggers, how the player reacts) here. See docs/EVENTS.md.
+    marker = []
+
+    @app.on("key_down")
+    def on_key(event):
+        if event.key == "space":
+            if marker:
+                event.app.hud.items.remove(marker.pop())
+            else:
+                marker.append(event.app.hud.add(rome.Mesh.sphere(), x=0.5, y=0.08, size=0.04,
+                                                color=(1.0, 0.9, 0.3)))
+
     app.run(update)
 
 
@@ -301,6 +314,64 @@ the GPU backend. Edit `Player.update(...)` to change how movement feels, or
 replace the class entirely for a different control scheme. Tune the start
 position, FOV, speed, and mouse sensitivity in `config/game.toml` under
 `[player]`.
+
+## HUD overlay
+
+`app.hud.add(mesh, x, y, size, rotation, color)` draws a mesh in screen space on
+top of the 3D scene — `x`/`y` are 0..1 with (0,0) top-left. Good for markers,
+reticles, or 3D icons. GPU backend only.
+
+## Events
+
+Register listeners to react to input and frames without touching the loop:
+
+```python
+@app.on("key_down")
+def on_key(event):
+    if event.key == "space":
+        ...
+```
+
+`main.py` ships a Space-to-toggle-a-HUD-marker example. See **[docs/EVENTS.md](docs/EVENTS.md)**
+for the full event list and keep it updated as you add your own.
+"""
+
+_EVENTS_DOC = """\
+# Events in __NAME__
+
+ROME fires events every frame; register listeners to react — the place to change
+how the player interacts with the scene without touching the loop.
+
+```python
+@app.on("key_down")
+def on_key(event):
+    if event.key == "space":
+        ...  # event.app gives you the scene, camera, hud, player, etc.
+```
+
+Or imperatively: `app.on("update", my_func)` / `app.events.off("update", my_func)`.
+
+## Built-in event types
+
+| Type         | Fired when                      | Fields           |
+|--------------|---------------------------------|------------------|
+| `update`     | every frame                     | `dt`             |
+| `key_down`   | a key is pressed this frame     | `key`            |
+| `key_up`     | a key is released               | `key`            |
+| `mouse_move` | the mouse moved (GPU backend)   | `dx`, `dy`       |
+| `quit`       | the app is closing              | —                |
+
+Every event also carries `app` (reach the scene / camera / hud) and `input` (the
+current `InputState`). Key names: lowercase letters, `escape`, `space`, `enter`;
+arrow keys report as `w`/`a`/`s`/`d`.
+
+## Your game's events
+
+As you add your own interactions, list them here so they stay documented:
+
+| Type | What it does |
+|------|--------------|
+| `space` (key_down) | toggles a HUD marker (the starter example in `main.py`) |
 """
 
 _GITIGNORE = """\
@@ -354,6 +425,7 @@ def cmd_new(args: argparse.Namespace) -> int:
         "game/player.py": _PLAYER,
         "config/game.toml": _CONFIG,
         "assets/README.md": _ASSETS_README,
+        "docs/EVENTS.md": _EVENTS_DOC,
         "README.md": _README,
         ".gitignore": _GITIGNORE,
     }
