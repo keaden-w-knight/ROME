@@ -104,6 +104,8 @@ class AsciiBackend(Backend):
             fov=camera.fov,
             color=self._color,
             vt=True,
+            lights=[light.to_tuple() for light in scene.lights],
+            ambient=scene.ambient,
         )
         sys.stdout.write(frame)
         sys.stdout.flush()
