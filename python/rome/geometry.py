@@ -129,9 +129,9 @@ _GLTF_TYPE_COUNT = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
 
 def load_gltf(path: str) -> Geometry:
     """Load geometry from a glTF 2.0 file (.glb binary, or .gltf with external /
-    base64 buffers). All mesh primitives are merged; node transforms are not
-    applied (geometry is taken in mesh-local space, then centred/scaled), which
-    is enough for single-object models and the common cases."""
+    base64 buffers). Walks the node hierarchy and applies each node's world
+    transform, so multi-part models land correctly positioned. Falls back to
+    mesh-local geometry when the file has no nodes."""
     with open(path, "rb") as f:
         data = f.read()
 
@@ -145,6 +145,7 @@ def load_gltf(path: str) -> Geometry:
 
     accessors = gltf.get("accessors", [])
     views = gltf.get("bufferViews", [])
+    meshes = gltf.get("meshes", [])
 
     def read_accessor(idx: int) -> list[tuple]:
         acc = accessors[idx]
@@ -157,12 +158,12 @@ def load_gltf(path: str) -> Geometry:
         fmt = "<" + fmt_char * ncomp
         return [struct.unpack_from(fmt, buf, start + i * stride) for i in range(acc["count"])]
 
-    verts: list[Vec3] = []
-    normals: list[Vec3] = []
-    tris: list[tuple[int, int, int]] = []
-    have_normals = True
-    for mesh in gltf.get("meshes", []):
-        for prim in mesh.get("primitives", []):
+    def read_mesh(mesh_index: int):
+        verts: list[Vec3] = []
+        normals: list[Vec3] = []
+        tris: list[tuple[int, int, int]] = []
+        have_normals = True
+        for prim in meshes[mesh_index].get("primitives", []):
             attrs = prim.get("attributes", {})
             if "POSITION" not in attrs:
                 continue
@@ -179,11 +180,105 @@ def load_gltf(path: str) -> Geometry:
                 flat = list(range(len(positions)))  # non-indexed
             for k in range(0, len(flat) - 2, 3):
                 tris.append((base_index + flat[k], base_index + flat[k + 1], base_index + flat[k + 2]))
+        return verts, normals, tris, have_normals
 
-    if not verts or not tris:
+    out_v: list[Vec3] = []
+    out_n: list[Vec3] = []
+    out_t: list[tuple[int, int, int]] = []
+    state = {"have_normals": True}  # closure-writable flag
+
+    def emit(mesh_index: int, world: list[float]) -> None:
+        verts, normals, tris, have_normals = read_mesh(mesh_index)
+        base = len(out_v)
+        out_v.extend(_mat_point(world, v) for v in verts)
+        if have_normals and len(normals) == len(verts):
+            out_n.extend(_normalized(_mat_dir(world, n)) for n in normals)
+        else:
+            state["have_normals"] = False
+            out_n.extend((0.0, 0.0, 1.0) for _ in verts)
+        out_t.extend((base + a, base + b, base + c) for a, b, c in tris)
+
+    nodes = gltf.get("nodes")
+    if nodes:
+        def node_local(node: dict) -> list[float]:
+            if "matrix" in node:
+                return list(node["matrix"])
+            return _mat_trs(node.get("translation", (0.0, 0.0, 0.0)),
+                            node.get("rotation", (0.0, 0.0, 0.0, 1.0)),
+                            node.get("scale", (1.0, 1.0, 1.0)))
+
+        def walk(index: int, parent: list[float]) -> None:
+            node = nodes[index]
+            world = _mat_mul(parent, node_local(node))
+            if "mesh" in node:
+                emit(node["mesh"], world)
+            for child in node.get("children", ()):
+                walk(child, world)
+
+        if "scenes" in gltf and gltf["scenes"]:
+            roots = gltf["scenes"][gltf.get("scene", 0)].get("nodes", [])
+        else:  # no scene: roots are nodes that aren't anyone's child
+            children = {c for n in nodes for c in n.get("children", ())}
+            roots = [i for i in range(len(nodes)) if i not in children]
+        for root in roots:
+            walk(root, _MAT_IDENTITY)
+    else:
+        for mesh_index in range(len(meshes)):
+            emit(mesh_index, _MAT_IDENTITY)
+
+    if not out_v or not out_t:
         raise ValueError(f"{path}: no mesh geometry found")
-    # If any primitive lacked normals, recompute them all for consistency.
-    return _build(verts, tris, normals if have_normals and len(normals) == len(verts) else None)
+    return _build(out_v, out_t, out_n if state["have_normals"] else None)
+
+
+# --- 4x4 matrices, column-major like glTF -------------------------------------
+
+_MAT_IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
+def _mat_mul(a: list[float], b: list[float]) -> list[float]:
+    r = [0.0] * 16
+    for col in range(4):
+        for row in range(4):
+            r[col * 4 + row] = (
+                a[row] * b[col * 4]
+                + a[4 + row] * b[col * 4 + 1]
+                + a[8 + row] * b[col * 4 + 2]
+                + a[12 + row] * b[col * 4 + 3]
+            )
+    return r
+
+
+def _mat_trs(t, q, s) -> list[float]:
+    x, y, z, w = q
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    sx, sy, sz = s
+    return [
+        (1 - 2 * (yy + zz)) * sx, (2 * (xy + wz)) * sx, (2 * (xz - wy)) * sx, 0.0,
+        (2 * (xy - wz)) * sy, (1 - 2 * (xx + zz)) * sy, (2 * (yz + wx)) * sy, 0.0,
+        (2 * (xz + wy)) * sz, (2 * (yz - wx)) * sz, (1 - 2 * (xx + yy)) * sz, 0.0,
+        t[0], t[1], t[2], 1.0,
+    ]
+
+
+def _mat_point(m: list[float], p: Vec3) -> Vec3:
+    px, py, pz = p
+    return (
+        m[0] * px + m[4] * py + m[8] * pz + m[12],
+        m[1] * px + m[5] * py + m[9] * pz + m[13],
+        m[2] * px + m[6] * py + m[10] * pz + m[14],
+    )
+
+
+def _mat_dir(m: list[float], v: Vec3) -> Vec3:
+    vx, vy, vz = v
+    return (
+        m[0] * vx + m[4] * vy + m[8] * vz,
+        m[1] * vx + m[5] * vy + m[9] * vz,
+        m[2] * vx + m[6] * vy + m[10] * vz,
+    )
 
 
 def _parse_glb(data: bytes) -> tuple[dict, bytes]:
