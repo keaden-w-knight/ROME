@@ -64,6 +64,11 @@ public:
                                               const std::vector<MeshInstance>& instances,
                                               const CameraParams& camera);
 
+    /// Set the window title (e.g. an FPS readout).
+    void set_title(const std::string& title) {
+        window_.set_title(title);
+    }
+
     /// Keys currently held down (see Window::keys_held for the naming).
     [[nodiscard]] std::vector<std::string> keys_held() const;
 

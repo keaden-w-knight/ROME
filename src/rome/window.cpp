@@ -175,4 +175,10 @@ bool Window::consume_resize_flag() {
     return std::exchange(resized_, false);
 }
 
+void Window::set_title(const std::string& title) {
+    if (window_ != nullptr) {
+        SDL_SetWindowTitle(window_, title.c_str());
+    }
+}
+
 }  // namespace rome

@@ -57,6 +57,10 @@ class Backend(ABC):
         Optional: backends that cannot render off-screen raise."""
         raise NotImplementedError(f"the {self.name} backend has no off-screen render")
 
+    def set_title(self, text: str) -> None:
+        """Set the window/terminal title (e.g. an FPS readout). Optional; the
+        default does nothing."""
+
     def info(self) -> str:
         """A human-readable line about the backend (device name, mode, …)."""
         return self.name

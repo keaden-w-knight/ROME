@@ -63,6 +63,8 @@ class AsciiBackend(Backend):
             geo = geometry.cube()
         elif mesh.kind == "obj":
             geo = geometry.load_obj(mesh.path)
+        elif mesh.kind == "gltf":
+            geo = geometry.load_gltf(mesh.path)
         else:
             raise ValueError(f"unknown mesh kind {mesh.kind!r}")
         native = self._ta.Mesh.from_arrays(geo.positions, geo.normals, geo.indices)
@@ -103,6 +105,14 @@ class AsciiBackend(Backend):
         )
         sys.stdout.write(frame)
         sys.stdout.flush()
+
+    def set_title(self, text: str) -> None:
+        # OSC 0: set the terminal window/tab title.
+        try:
+            sys.stdout.write(f"\x1b]0;{text}\x07")
+            sys.stdout.flush()
+        except Exception:
+            pass
 
     def should_close(self) -> bool:
         return self._closed

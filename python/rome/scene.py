@@ -32,8 +32,10 @@ class Mesh:
 
     @staticmethod
     def load(path: str) -> "Mesh":
-        """A mesh from a regular 3D file on disk (OBJ today)."""
-        return Mesh(kind="obj", path=path)
+        """A mesh from a 3D file on disk: OBJ, or glTF 2.0 (.glb / .gltf)."""
+        lower = path.lower()
+        kind = "gltf" if lower.endswith((".glb", ".gltf")) else "obj"
+        return Mesh(kind=kind, path=path)
 
 
 @dataclass

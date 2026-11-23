@@ -50,6 +50,9 @@ public:
         should_close_ = true;
     }
 
+    /// Set the window's title bar text (e.g. to show an FPS readout).
+    void set_title(const std::string& title);
+
     /// True for exactly one pump_events() call after the size changed.
     [[nodiscard]] bool consume_resize_flag();
 

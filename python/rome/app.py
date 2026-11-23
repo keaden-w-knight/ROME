@@ -52,6 +52,15 @@ class App:
     def running(self) -> bool:
         return not self._closed and not self._backend.should_close()
 
+    @property
+    def fps(self) -> float:
+        """Frames per second from the most recent tick's delta time."""
+        return 1.0 / self.dt if self.dt > 0 else 0.0
+
+    def set_title(self, text: str) -> None:
+        """Set the window (or terminal) title — handy for an FPS readout."""
+        self._backend.set_title(text)
+
     def info(self) -> str:
         return self._backend.info()
 

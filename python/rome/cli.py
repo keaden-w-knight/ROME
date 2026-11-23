@@ -60,7 +60,11 @@ def main() -> None:
         height=cfg["window"]["height"],
         title=cfg["game"]["title"],
     )
-    print(f"{cfg['game']['title']} — {app.info()}")
+    title = cfg["game"]["title"]
+    print(f"{title} — {app.info()}")
+
+    # Refresh an FPS readout in the title a couple of times a second.
+    stats = {"time": 0.0, "frames": 0}
 
     def update(app: rome.App) -> None:
         if app.input.down("escape"):
@@ -68,6 +72,13 @@ def main() -> None:
             return
         player.update(app.dt, app.input)
         app.camera = player.camera
+
+        stats["time"] += app.dt
+        stats["frames"] += 1
+        if stats["time"] >= 0.5:
+            app.set_title(f"{title} — {stats['frames'] / stats['time']:.0f} fps")
+            stats["time"] = 0.0
+            stats["frames"] = 0
 
     app.run(update)
 

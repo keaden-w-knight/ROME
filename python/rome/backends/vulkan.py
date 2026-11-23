@@ -46,6 +46,8 @@ class VulkanBackend(Backend):
             geo = geometry.cube()
         elif mesh.kind == "obj":
             geo = geometry.load_obj(mesh.path)
+        elif mesh.kind == "gltf":
+            geo = geometry.load_gltf(mesh.path)
         else:
             raise ValueError(f"unknown mesh kind {mesh.kind!r}")
         handle = self._app.upload_mesh(geo.positions, geo.normals, geo.indices)
@@ -86,6 +88,10 @@ class VulkanBackend(Backend):
             up=camera.up,
             fov=camera.fov,
         )
+
+    def set_title(self, text: str) -> None:
+        if self._app is not None:
+            self._app.set_title(text)
 
     def should_close(self) -> bool:
         return not self._running

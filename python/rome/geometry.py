@@ -9,7 +9,11 @@ generator, which produces the same shapes.)
 
 from __future__ import annotations
 
+import base64
+import json
 import math
+import os
+import struct
 from dataclasses import dataclass
 
 Vec3 = tuple[float, float, float]
@@ -101,6 +105,104 @@ def load_obj(path: str) -> Geometry:
     if not verts or not tris:
         raise ValueError(f"{path}: no geometry found")
     return _build(verts, tris)
+
+
+_GLTF_COMPONENT = {
+    5120: ("b", 1),  # BYTE
+    5121: ("B", 1),  # UNSIGNED_BYTE
+    5122: ("h", 2),  # SHORT
+    5123: ("H", 2),  # UNSIGNED_SHORT
+    5125: ("I", 4),  # UNSIGNED_INT
+    5126: ("f", 4),  # FLOAT
+}
+_GLTF_TYPE_COUNT = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
+
+
+def load_gltf(path: str) -> Geometry:
+    """Load geometry from a glTF 2.0 file (.glb binary, or .gltf with external /
+    base64 buffers). All mesh primitives are merged; node transforms are not
+    applied (geometry is taken in mesh-local space, then centred/scaled), which
+    is enough for single-object models and the common cases."""
+    with open(path, "rb") as f:
+        data = f.read()
+
+    if data[:4] == b"glTF":  # .glb binary container
+        gltf, bin_chunk = _parse_glb(data)
+        buffers = [bin_chunk]
+    else:  # .gltf JSON
+        gltf = json.loads(data)
+        base = os.path.dirname(path)
+        buffers = [_load_gltf_buffer(b, base) for b in gltf.get("buffers", [])]
+
+    accessors = gltf.get("accessors", [])
+    views = gltf.get("bufferViews", [])
+
+    def read_accessor(idx: int) -> list[tuple]:
+        acc = accessors[idx]
+        view = views[acc["bufferView"]]
+        buf = buffers[view.get("buffer", 0)]
+        fmt_char, comp_size = _GLTF_COMPONENT[acc["componentType"]]
+        ncomp = _GLTF_TYPE_COUNT[acc["type"]]
+        start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        stride = view.get("byteStride") or (comp_size * ncomp)
+        fmt = "<" + fmt_char * ncomp
+        return [struct.unpack_from(fmt, buf, start + i * stride) for i in range(acc["count"])]
+
+    verts: list[Vec3] = []
+    normals: list[Vec3] = []
+    tris: list[tuple[int, int, int]] = []
+    have_normals = True
+    for mesh in gltf.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            attrs = prim.get("attributes", {})
+            if "POSITION" not in attrs:
+                continue
+            base_index = len(verts)
+            positions = read_accessor(attrs["POSITION"])
+            verts.extend((p[0], p[1], p[2]) for p in positions)
+            if "NORMAL" in attrs:
+                normals.extend((n[0], n[1], n[2]) for n in read_accessor(attrs["NORMAL"]))
+            else:
+                have_normals = False
+            if "indices" in prim:
+                flat = [v[0] for v in read_accessor(prim["indices"])]
+            else:
+                flat = list(range(len(positions)))  # non-indexed
+            for k in range(0, len(flat) - 2, 3):
+                tris.append((base_index + flat[k], base_index + flat[k + 1], base_index + flat[k + 2]))
+
+    if not verts or not tris:
+        raise ValueError(f"{path}: no mesh geometry found")
+    # If any primitive lacked normals, recompute them all for consistency.
+    return _build(verts, tris, normals if have_normals and len(normals) == len(verts) else None)
+
+
+def _parse_glb(data: bytes) -> tuple[dict, bytes]:
+    json_bytes: bytes | None = None
+    bin_chunk = b""
+    offset = 12  # skip 12-byte header (magic, version, length)
+    while offset + 8 <= len(data):
+        chunk_len, chunk_type = struct.unpack_from("<II", data, offset)
+        offset += 8
+        chunk = data[offset : offset + chunk_len]
+        offset += chunk_len
+        if chunk_type == 0x4E4F534A:  # "JSON"
+            json_bytes = chunk
+        elif chunk_type == 0x004E4942:  # "BIN\0"
+            bin_chunk = chunk
+    if json_bytes is None:
+        raise ValueError("glb: no JSON chunk")
+    return json.loads(json_bytes), bin_chunk
+
+
+def _load_gltf_buffer(buf: dict, base_dir: str) -> bytes:
+    uri = buf.get("uri")
+    if uri is None:
+        return b""
+    if uri.startswith("data:"):
+        return base64.b64decode(uri.split(",", 1)[1])
+    with open(os.path.join(base_dir, uri), "rb") as f:
+        return f.read()
 
 
 def _build(
