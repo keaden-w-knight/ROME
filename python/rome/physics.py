@@ -352,6 +352,15 @@ class CollisionSystem:
         # kicks in for genuinely fast bodies (normal frames stay a single step).
         self.ccd = True
         self.max_substeps = 8
+        # Sleeping: a solid mover that stays below these speeds for sleep_time is
+        # put to sleep — skipped by integration and resolution — until a moving
+        # body touches it. Whole contact-connected islands sleep and wake together,
+        # so a resting stack costs nothing and doesn't jitter.
+        self.sleeping = True
+        self.sleep_linear = 0.05
+        self.sleep_angular = 0.05
+        self.sleep_time = 0.5
+        self._sleep_timer: dict[int, float] = {}
 
     @staticmethod
     def _inv_mass(node) -> float:
@@ -366,8 +375,8 @@ class CollisionSystem:
             return
         gx, gy, gz = self.gravity
         for n in participants:
-            if not n.solid or n.static_body:
-                continue
+            if not n.solid or n.static_body or not n.awake:
+                continue  # sleeping bodies are frozen in place until woken
             vx, vy, vz = n.velocity
             vx, vy, vz = vx + gx * dt, vy + gy * dt, vz + gz * dt
             n.velocity = (vx, vy, vz)
@@ -581,6 +590,73 @@ class CollisionSystem:
                 sub = need
         return min(sub, self.max_substeps)
 
+    @staticmethod
+    def _awake_mover(n) -> bool:
+        return n.solid and not n.static_body and n.awake
+
+    def _wake(self, contacts) -> None:
+        """Island wake: a mover touching an awake mover (directly or through a
+        chain of resting contacts) is woken, so a hit propagates through a pile."""
+        if not self.sleeping:
+            return
+        adj: dict[int, set] = {}
+        by_id: dict[int, object] = {}
+        for c in contacts:
+            am = c.a.solid and not c.a.static_body
+            bm = c.b.solid and not c.b.static_body
+            if am:
+                by_id[id(c.a)] = c.a
+            if bm:
+                by_id[id(c.b)] = c.b
+            if am and bm:  # an edge in the island graph
+                adj.setdefault(id(c.a), set()).add(id(c.b))
+                adj.setdefault(id(c.b), set()).add(id(c.a))
+        from collections import deque
+
+        queue = deque(i for i, n in by_id.items() if n.awake)
+        seen = set(queue)
+        while queue:
+            i = queue.popleft()
+            for j in adj.get(i, ()):
+                if j not in seen:
+                    seen.add(j)
+                    queue.append(j)
+        for i in seen:
+            n = by_id[i]
+            if not n.awake:
+                n.awake = True
+                self._sleep_timer[i] = 0.0
+
+    def _active(self, contacts):
+        """Contacts worth solving: at least one awake mover (two resting bodies,
+        or a resting body on static ground, need no impulse)."""
+        if not self.sleeping:
+            return contacts
+        return [c for c in contacts if self._awake_mover(c.a) or self._awake_mover(c.b)]
+
+    def _sleep_update(self, nodes, dt) -> None:
+        """Advance each mover's rest timer; sleep one that's been slow long enough
+        (zeroing its motion), wake one that's moving."""
+        if not self.sleeping or dt <= 0.0:
+            return
+        lin2, ang2 = self.sleep_linear ** 2, self.sleep_angular ** 2
+        for n in nodes:
+            if not n.solid or n.static_body:
+                continue
+            vx, vy, vz = n.velocity
+            wx, wy, wz = n.angular_velocity
+            slow = (vx * vx + vy * vy + vz * vz) <= lin2 and (wx * wx + wy * wy + wz * wz) <= ang2
+            i = id(n)
+            if slow:
+                self._sleep_timer[i] = self._sleep_timer.get(i, 0.0) + dt
+                if self._sleep_timer[i] >= self.sleep_time:
+                    n.awake = False
+                    n.velocity = (0.0, 0.0, 0.0)
+                    n.angular_velocity = (0.0, 0.0, 0.0)
+            else:
+                self._sleep_timer[i] = 0.0
+                n.awake = True
+
     def step(self, scene, app) -> None:
         # A node is in the physics world if it collides (fires events) or is solid
         # (gets resolved); solids are integrated before anything is detected.
@@ -594,8 +670,10 @@ class CollisionSystem:
         if sub == 1:
             self._integrate(nodes, dt)
             current, colliders, contacts = self._detect(nodes)
-            if contacts:
-                self._resolve(contacts)
+            self._wake(contacts)
+            active = self._active(contacts)
+            if active:
+                self._resolve(active)
         else:
             # Substep integrate+resolve so a fast body can't tunnel; detect once
             # more at the end for the frame's enter/exit events.
@@ -603,9 +681,13 @@ class CollisionSystem:
             for _ in range(sub):
                 self._integrate(nodes, hdt)
                 _, _, contacts = self._detect(nodes)
-                if contacts:
-                    self._resolve(contacts)
+                self._wake(contacts)
+                active = self._active(contacts)
+                if active:
+                    self._resolve(active)
             current, colliders, _ = self._detect(nodes)
+
+        self._sleep_update(nodes, dt)
 
         # Enter: overlapping now but not last frame.
         for key, (a, b) in current.items():

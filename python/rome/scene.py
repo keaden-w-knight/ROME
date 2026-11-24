@@ -83,6 +83,7 @@ class Node:
     restitution: float = 0.2  # bounciness, 0 (dead stop) .. 1 (full bounce)
     friction: float = 0.0  # tangential friction coefficient (0 = frictionless)
     angular_damping: float = 0.0  # per-second spin decay (0 = spins forever)
+    awake: bool = True  # physics-managed: a resting body sleeps; a hit wakes it
     # Per-node event dispatcher; collision events fire here. Excluded from the
     # dataclass's equality/repr so two nodes aren't "equal" by their listeners.
     events: Events = field(default_factory=Events, compare=False, repr=False)

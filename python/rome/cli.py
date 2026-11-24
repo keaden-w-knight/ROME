@@ -434,6 +434,12 @@ in pieces so it can't jump through a thin wall; on by default, only kicks in whe
 something's moving fast). A **non-solid** collider is a pure *trigger* — it fires
 events but never pushes.
 
+Resting bodies **sleep** (`sleeping`, `sleep_linear`/`sleep_angular`/`sleep_time`):
+a solid mover that stays still long enough is frozen — skipped by the solver, so a
+settled pile costs nothing and stops jittering — until a moving body touches it.
+Sleep propagates by island: a hit on one body in a resting stack wakes the whole
+stack. `node.awake` reads (or forces) the state; it's `False` while asleep.
+
 The player (`game/player.py`) is a `rome.CharacterController` rather than a dynamic
 body: a kinematic sphere that slides along solids. Move it with `body.move(delta,
 scene)` — it substeps long moves for the same no-tunnelling reason. That's the
