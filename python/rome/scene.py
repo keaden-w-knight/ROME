@@ -69,9 +69,18 @@ class Node:
     color: Vec3 = (0.62, 0.68, 0.82)  # linear RGB 0..1 (GPU backends; ASCII ignores it)
     name: str | None = None
     visible: bool = True  # False hides the node from drawing (it still collides)
-    collision: bool = False  # opt in to collision tests
+    collision: bool = False  # opt in to collision tests (fires events)
     collision_shape: str = "aabb"  # "aabb" | "sphere"
     layers: Any = (0,)  # only nodes sharing a layer are tested (see rome.physics)
+    # Physics response (see rome.physics). A solid node is pushed apart from other
+    # solids and exchanges momentum; a static body is solid but immovable (infinite
+    # mass) — walls and floors. Velocity is integrated each tick for solid movers.
+    solid: bool = False
+    static_body: bool = False
+    velocity: Vec3 = (0.0, 0.0, 0.0)
+    mass: float = 1.0
+    restitution: float = 0.2  # bounciness, 0 (dead stop) .. 1 (full bounce)
+    friction: float = 0.0  # tangential friction coefficient (0 = frictionless)
     # Per-node event dispatcher; collision events fire here. Excluded from the
     # dataclass's equality/repr so two nodes aren't "equal" by their listeners.
     events: Events = field(default_factory=Events, compare=False, repr=False)
@@ -189,10 +198,18 @@ class Scene:
         collision: bool = False,
         collision_shape: str = "aabb",
         layers: Any = (0,),
+        solid: bool = False,
+        static_body: bool = False,
+        velocity: Vec3 = (0.0, 0.0, 0.0),
+        mass: float = 1.0,
+        restitution: float = 0.2,
+        friction: float = 0.0,
     ) -> Node:
         node = Node(
             mesh=mesh, position=position, rotation=rotation, scale=scale, color=color, name=name,
             visible=visible, collision=collision, collision_shape=collision_shape, layers=layers,
+            solid=solid, static_body=static_body, velocity=velocity, mass=mass,
+            restitution=restitution, friction=friction,
         )
         self.nodes.append(node)
         return node

@@ -371,6 +371,38 @@ it overlaps this frame).
 pickup.on("collision", lambda e: e.node.collect() if e.other is player else None)
 enemy.on("collision_exit", lambda e, hud: hud.clear(), app.hud)  # event + "this"
 ```
+
+### Physics response (solid bodies)
+
+Events tell you a hit *happened*; mark a node `solid=True` and it's also **pushed
+apart** from other solids and exchanges momentum. Solid movers are driven by
+`velocity` (the engine integrates it each tick, plus `app.physics.gravity`), so
+you set velocity instead of position for them. A `static_body` is solid but never
+moves (walls, floors) — movers bounce off it correctly.
+
+```python
+app.physics.gravity = (0.0, -9.8, 0.0)
+
+floor = scene.add(rome.Mesh.cube(), position=(0,-3,0), scale=6.0,
+                  collision=True, solid=True, static_body=True)
+ball  = scene.add(rome.Mesh.sphere(), position=(0,5,0), collision_shape="sphere",
+                  collision=True, solid=True, velocity=(2,0,0),
+                  mass=1.0, restitution=0.7, friction=0.3)  # bouncy, a bit grippy
+```
+
+| Field | Meaning |
+|---|---|
+| `solid` | push apart + momentum (needs `collision=True` to also fire events) |
+| `static_body` | solid but immovable — infinite mass (walls, floors) |
+| `velocity` | `(x,y,z)` per second; integrated each tick for solid movers |
+| `mass` | heavier bodies shove lighter ones more (ignored for a static body) |
+| `restitution` | bounciness `0` (dead stop) .. `1` (full bounce) |
+| `friction` | tangential friction `0`..`1` (slows sliding along a surface) |
+
+Tune the solver on `app.physics`: `gravity`, `solver_iterations` (stiffer stacks),
+`position_correction`/`slop` (how hard penetration is pushed out), and `max_dt`
+(caps the step so a long frame can't tunnel bodies through each other). A
+**non-solid** collider is a pure *trigger* — it fires events but never pushes.
 """
 
 _EVENTS_DOC = """\
