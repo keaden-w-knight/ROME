@@ -260,6 +260,69 @@ def _inv_inertia(node, radius) -> float:
     return 1.0 / inertia if inertia > 0.0 else 0.0
 
 
+# --- Quaternion orientation (x, y, z, w). Used to integrate spin exactly, then
+# converted back to the Euler `rotation` both renderers read. This fixes the
+# small-angle error of adding ω·dt to Euler angles (wrong for multi-axis spin);
+# the only residual limit is gimbal lock in the Euler *representation* near
+# pitch ±90°, which a full quaternion render path (renderer + 3-ASCII) would
+# remove. ---
+
+def _quat_mul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz)
+
+
+def _euler_to_quat(e):
+    """Euler (rx, ry, rz) → quaternion, matching the renderer's Rz·Rx·Ry order."""
+    rx, ry, rz = e[0] / 2, e[1] / 2, e[2] / 2
+    qx = (math.sin(rx), 0.0, 0.0, math.cos(rx))
+    qy = (0.0, math.sin(ry), 0.0, math.cos(ry))
+    qz = (0.0, 0.0, math.sin(rz), math.cos(rz))
+    return _quat_mul(qz, _quat_mul(qx, qy))
+
+
+def _quat_to_euler(q):
+    """Quaternion → Euler (rx, ry, rz) in the renderer's Rz·Rx·Ry convention."""
+    x, y, z, w = q
+    # Rotation matrix elements we need (R = Rz·Rx·Ry): sin(rx)=R21, and
+    # ry/rz from the surrounding terms. See the matrix in the collision docs.
+    r21 = 2.0 * (y * z + w * x)
+    r21 = max(-1.0, min(1.0, r21))
+    rx = math.asin(r21)
+    if abs(r21) < 0.99999:
+        r20 = 2.0 * (x * z - w * y)
+        r22 = 1.0 - 2.0 * (x * x + y * y)
+        r01 = 2.0 * (x * y - w * z)
+        r11 = 1.0 - 2.0 * (x * x + z * z)
+        ry = math.atan2(-r20, r22)
+        rz = math.atan2(-r01, r11)
+    else:  # gimbal lock: fold ry into rz
+        r00 = 1.0 - 2.0 * (y * y + z * z)
+        r10 = 2.0 * (x * y + w * z)
+        ry = 0.0
+        rz = math.atan2(r10, r00)
+    return (rx, ry, rz)
+
+
+def _quat_integrate(q, omega, dt):
+    """Rotate q by the exact rotation ω implies over dt (axis-angle, not a
+    first-order step), then renormalise."""
+    ox, oy, oz = omega
+    speed = math.sqrt(ox * ox + oy * oy + oz * oz)
+    if speed < 1e-12:
+        return q
+    half = speed * dt / 2.0
+    s = math.sin(half) / speed
+    dq = (ox * s, oy * s, oz * s, math.cos(half))
+    r = _quat_mul(dq, q)
+    n = math.sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3])
+    return (r[0] / n, r[1] / n, r[2] / n, r[3] / n) if n > 0.0 else q
+
+
 class CollisionSystem:
     """Steps collisions once per frame: fits each colliding node's bound, tests
     the pairs that share a layer, and fires enter/exit events. Caches each mesh's
@@ -310,17 +373,16 @@ class CollisionSystem:
             n.velocity = (vx, vy, vz)
             px, py, pz = n.position
             n.position = (px + vx * dt, py + vy * dt, pz + vz * dt)
-            # Angular: decay, then advance the Euler rotation. Adding ω·dt to Euler
-            # angles is a small-angle approximation — fine for tumbling, not exact
-            # for large compounded spins (true 3D orientation wants a quaternion).
+            # Angular: decay, then advance orientation by integrating the spin as a
+            # quaternion (exact for any axis) and writing it back as Euler.
             wx, wy, wz = n.angular_velocity
             if wx or wy or wz:
                 if n.angular_damping:
                     k = max(0.0, 1.0 - n.angular_damping * dt)
                     wx, wy, wz = wx * k, wy * k, wz * k
                     n.angular_velocity = (wx, wy, wz)
-                rx, ry, rz = n.rotation
-                n.rotation = (rx + wx * dt, ry + wy * dt, rz + wz * dt)
+                q = _quat_integrate(_euler_to_quat(n.rotation), (wx, wy, wz), dt)
+                n.rotation = _quat_to_euler(q)
 
     @staticmethod
     def _apply_impulse(c, imp):

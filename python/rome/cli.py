@@ -421,9 +421,11 @@ ball  = scene.add(rome.Mesh.sphere(), position=(0,5,0), collision_shape="sphere"
 | `angular_damping` | per-second spin decay (`0` spins forever) |
 
 An off-centre impact imparts spin, and `angular_velocity` tumbles a body on its
-own. The solver uses a **scalar** moment of inertia (sphere vs box) and advances
-the Euler rotation by `ω·dt` — plausible tumbling for a game, not a rigid-body
-reference (exact 3D orientation would want quaternions).
+own. Spin is integrated as a quaternion (exact for any axis — a body tumbling
+about a diagonal returns cleanly after a full turn) and written back to the Euler
+`rotation` the renderers read. The inertia is a **scalar** approximation (sphere
+vs box), and the only residual limit is gimbal lock in the Euler *representation*
+near pitch ±90° — plenty for game tumbling, short of a rigid-body reference.
 
 Tune the solver on `app.physics`: `gravity`, `solver_iterations` (stiffer stacks),
 `position_correction`/`slop` (how hard penetration is pushed out), `max_dt` (caps
