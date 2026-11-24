@@ -414,9 +414,16 @@ ball  = scene.add(rome.Mesh.sphere(), position=(0,5,0), collision_shape="sphere"
 | `solid` | push apart + momentum (needs `collision=True` to also fire events) |
 | `static_body` | solid but immovable — infinite mass (walls, floors) |
 | `velocity` | `(x,y,z)` per second; integrated each tick for solid movers |
+| `angular_velocity` | Euler `(x,y,z)` rad/sec; off-centre hits spin a body up |
 | `mass` | heavier bodies shove lighter ones more (ignored for a static body) |
 | `restitution` | bounciness `0` (dead stop) .. `1` (full bounce) |
 | `friction` | tangential friction `0`..`1` (slows sliding along a surface) |
+| `angular_damping` | per-second spin decay (`0` spins forever) |
+
+An off-centre impact imparts spin, and `angular_velocity` tumbles a body on its
+own. The solver uses a **scalar** moment of inertia (sphere vs box) and advances
+the Euler rotation by `ω·dt` — plausible tumbling for a game, not a rigid-body
+reference (exact 3D orientation would want quaternions).
 
 Tune the solver on `app.physics`: `gravity`, `solver_iterations` (stiffer stacks),
 `position_correction`/`slop` (how hard penetration is pushed out), `max_dt` (caps

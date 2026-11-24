@@ -20,6 +20,7 @@ See ``rome.events`` for the listener shape (lambdas, optional ``this``).
 from __future__ import annotations
 
 import math
+from collections import namedtuple
 
 from .events import Event
 
@@ -217,6 +218,48 @@ def contact(a, b):
     return (-n[0], -n[1], -n[2]), pen
 
 
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _body_centre(bound):
+    """World centre of a tagged bound (sphere centre, or box midpoint)."""
+    if bound[0] == "sphere":
+        return bound[1]
+    mn, mx = bound[1], bound[2]
+    return ((mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2)
+
+
+def _reach_along(bound, n):
+    """How far the bound's surface is from its centre along direction ``n`` — the
+    support distance. For the contact point used by the angular solver."""
+    if bound[0] == "sphere":
+        return bound[2]
+    mn, mx = bound[1], bound[2]
+    return (abs(n[0]) * (mx[0] - mn[0]) + abs(n[1]) * (mx[1] - mn[1])
+            + abs(n[2]) * (mx[2] - mn[2])) / 2
+
+
+# One solid-solid contact, everything the impulse solver needs. Inertia is a
+# scalar approximation (isotropic) rather than a full tensor — plausible spin for
+# a game, not a rigid-body reference.
+Contact = namedtuple("Contact", "a b n pen inv_ma inv_mb invIa invIb ca cb cp")
+
+
+def _inv_inertia(node, radius) -> float:
+    """Inverse of a scalar moment of inertia: solid sphere 2/5·m·r², box ~1/6·m·r².
+    Static bodies and zero mass are immovable (0)."""
+    if node.static_body or node.mass <= 0.0 or radius <= 0.0:
+        return 0.0
+    factor = 0.4 if node.collision_shape == "sphere" else (1.0 / 6.0)
+    inertia = factor * node.mass * radius * radius
+    return 1.0 / inertia if inertia > 0.0 else 0.0
+
+
 class CollisionSystem:
     """Steps collisions once per frame: fits each colliding node's bound, tests
     the pairs that share a layer, and fires enter/exit events. Caches each mesh's
@@ -267,53 +310,110 @@ class CollisionSystem:
             n.velocity = (vx, vy, vz)
             px, py, pz = n.position
             n.position = (px + vx * dt, py + vy * dt, pz + vz * dt)
+            # Angular: decay, then advance the Euler rotation. Adding ω·dt to Euler
+            # angles is a small-angle approximation — fine for tumbling, not exact
+            # for large compounded spins (true 3D orientation wants a quaternion).
+            wx, wy, wz = n.angular_velocity
+            if wx or wy or wz:
+                if n.angular_damping:
+                    k = max(0.0, 1.0 - n.angular_damping * dt)
+                    wx, wy, wz = wx * k, wy * k, wz * k
+                    n.angular_velocity = (wx, wy, wz)
+                rx, ry, rz = n.rotation
+                n.rotation = (rx + wx * dt, ry + wy * dt, rz + wz * dt)
+
+    @staticmethod
+    def _apply_impulse(c, imp):
+        """Add impulse ``imp`` at the contact (linear + angular) to both bodies —
+        a gets -imp at ca, b gets +imp at cb (angular via the lever arm)."""
+        a, b = c.a, c.b
+        if c.inv_ma > 0.0 or c.invIa > 0.0:
+            av = a.velocity
+            a.velocity = (av[0] - imp[0] * c.inv_ma, av[1] - imp[1] * c.inv_ma,
+                          av[2] - imp[2] * c.inv_ma)
+            ra = (c.cp[0] - c.ca[0], c.cp[1] - c.ca[1], c.cp[2] - c.ca[2])
+            ta = _cross(ra, imp)
+            aw = a.angular_velocity
+            a.angular_velocity = (aw[0] - ta[0] * c.invIa, aw[1] - ta[1] * c.invIa,
+                                  aw[2] - ta[2] * c.invIa)
+        if c.inv_mb > 0.0 or c.invIb > 0.0:
+            bv = b.velocity
+            b.velocity = (bv[0] + imp[0] * c.inv_mb, bv[1] + imp[1] * c.inv_mb,
+                          bv[2] + imp[2] * c.inv_mb)
+            rb = (c.cp[0] - c.cb[0], c.cp[1] - c.cb[1], c.cp[2] - c.cb[2])
+            tb = _cross(rb, imp)
+            bw = b.angular_velocity
+            b.angular_velocity = (bw[0] + tb[0] * c.invIb, bw[1] + tb[1] * c.invIb,
+                                  bw[2] + tb[2] * c.invIb)
+
+    @staticmethod
+    def _rel_vel(c):
+        """Relative velocity of the two bodies *at the contact point* — includes
+        each body's spin (v + ω×r)."""
+        a, b = c.a, c.b
+        ra = (c.cp[0] - c.ca[0], c.cp[1] - c.ca[1], c.cp[2] - c.ca[2])
+        rb = (c.cp[0] - c.cb[0], c.cp[1] - c.cb[1], c.cp[2] - c.cb[2])
+        va = tuple(a.velocity[k] + _cross(a.angular_velocity, ra)[k] for k in range(3))
+        vb = tuple(b.velocity[k] + _cross(b.angular_velocity, rb)[k] for k in range(3))
+        return (vb[0] - va[0], vb[1] - va[1], vb[2] - va[2])
+
+    def _eff_mass(self, c, axis):
+        """Inverse effective mass along ``axis`` (a unit direction), including the
+        rotational term invI·|r×axis|² for each body."""
+        ra = (c.cp[0] - c.ca[0], c.cp[1] - c.ca[1], c.cp[2] - c.ca[2])
+        rb = (c.cp[0] - c.cb[0], c.cp[1] - c.cb[1], c.cp[2] - c.cb[2])
+        raxa, rbxa = _cross(ra, axis), _cross(rb, axis)
+        return (c.inv_ma + c.inv_mb
+                + c.invIa * _dot(raxa, raxa) + c.invIb * _dot(rbxa, rbxa))
 
     def _resolve(self, contacts) -> None:
-        """Sequential-impulse solver: iterate the contacts, each pass killing the
-        approaching relative velocity (with restitution) and applying friction,
-        then a single positional correction so bodies don't sink."""
+        """Sequential-impulse solver with rotation: each pass kills the approaching
+        relative velocity at the contact point (restitution), then friction;
+        impulses applied at the contact point also spin the bodies. A final linear
+        positional correction keeps penetration from accumulating."""
         percent, slop = self.position_correction, self.slop
-        # contacts: (a, b, nx, ny, nz, pen, inv_a, inv_b)
         for _ in range(self.solver_iterations):
-            for a, b, nx, ny, nz, pen, inv_a, inv_b in contacts:
-                inv_sum = inv_a + inv_b
-                if inv_sum == 0.0:
-                    continue
-                avx, avy, avz = a.velocity
-                bvx, bvy, bvz = b.velocity
-                rvx, rvy, rvz = bvx - avx, bvy - avy, bvz - avz
-                vn = rvx * nx + rvy * ny + rvz * nz
+            for c in contacts:
+                rv = self._rel_vel(c)
+                vn = _dot(rv, c.n)
                 if vn >= 0.0:
                     continue  # already separating
-                e = min(a.restitution, b.restitution)
-                j = -(1.0 + e) * vn / inv_sum
-                avx, avy, avz = avx - j * nx * inv_a, avy - j * ny * inv_a, avz - j * nz * inv_a
-                bvx, bvy, bvz = bvx + j * nx * inv_b, bvy + j * ny * inv_b, bvz + j * nz * inv_b
-                # Coulomb friction along the tangent of the (updated) relative vel.
-                mu = math.sqrt(a.friction * b.friction)
-                if mu > 0.0:
-                    rvx, rvy, rvz = bvx - avx, bvy - avy, bvz - avz
-                    vn2 = rvx * nx + rvy * ny + rvz * nz
-                    tx, ty, tz = rvx - vn2 * nx, rvy - vn2 * ny, rvz - vn2 * nz
-                    tl = math.sqrt(tx * tx + ty * ty + tz * tz)
-                    if tl > 1e-9:
-                        tx, ty, tz = tx / tl, ty / tl, tz / tl
-                        jt = -(rvx * tx + rvy * ty + rvz * tz) / inv_sum
-                        jt = max(-mu * j, min(mu * j, jt))  # clamp to the friction cone
-                        avx, avy, avz = avx - jt * tx * inv_a, avy - jt * ty * inv_a, avz - jt * tz * inv_a
-                        bvx, bvy, bvz = bvx + jt * tx * inv_b, bvy + jt * ty * inv_b, bvz + jt * tz * inv_b
-                a.velocity, b.velocity = (avx, avy, avz), (bvx, bvy, bvz)
-        # Positional correction: shove the pair apart so penetration doesn't
-        # accumulate, split by inverse mass (the lighter body moves more).
-        for a, b, nx, ny, nz, pen, inv_a, inv_b in contacts:
-            inv_sum = inv_a + inv_b
+                inv_eff = self._eff_mass(c, c.n)
+                if inv_eff <= 0.0:
+                    continue
+                e = min(c.a.restitution, c.b.restitution)
+                j = -(1.0 + e) * vn / inv_eff
+                self._apply_impulse(c, (c.n[0] * j, c.n[1] * j, c.n[2] * j))
+                # Coulomb friction along the contact tangent.
+                mu = math.sqrt(c.a.friction * c.b.friction)
+                if mu <= 0.0:
+                    continue
+                rv = self._rel_vel(c)
+                vn2 = _dot(rv, c.n)
+                t = (rv[0] - vn2 * c.n[0], rv[1] - vn2 * c.n[1], rv[2] - vn2 * c.n[2])
+                tl = math.sqrt(_dot(t, t))
+                if tl <= 1e-9:
+                    continue
+                t = (t[0] / tl, t[1] / tl, t[2] / tl)
+                inv_eff_t = self._eff_mass(c, t)
+                if inv_eff_t <= 0.0:
+                    continue
+                jt = -_dot(rv, t) / inv_eff_t
+                jt = max(-mu * j, min(mu * j, jt))  # clamp to the friction cone
+                self._apply_impulse(c, (t[0] * jt, t[1] * jt, t[2] * jt))
+        # Positional correction (linear only), split by inverse mass.
+        for c in contacts:
+            inv_sum = c.inv_ma + c.inv_mb
             if inv_sum == 0.0:
                 continue
-            corr = max(pen - slop, 0.0) / inv_sum * percent
-            ax, ay, az = a.position
-            a.position = (ax - nx * corr * inv_a, ay - ny * corr * inv_a, az - nz * corr * inv_a)
-            bx, by, bz = b.position
-            b.position = (bx + nx * corr * inv_b, by + ny * corr * inv_b, bz + nz * corr * inv_b)
+            corr = max(c.pen - slop, 0.0) / inv_sum * percent
+            nx, ny, nz = c.n
+            ax, ay, az = c.a.position
+            c.a.position = (ax - nx * corr * c.inv_ma, ay - ny * corr * c.inv_ma,
+                            az - nz * corr * c.inv_ma)
+            bx, by, bz = c.b.position
+            c.b.position = (bx + nx * corr * c.inv_mb, by + ny * corr * c.inv_mb,
+                            bz + nz * corr * c.inv_mb)
 
     def _local_for(self, mesh):
         return _mesh_local_bounds(mesh, self._local)
@@ -367,7 +467,8 @@ class CollisionSystem:
         contacts: list = []
         if len(nodes) < 2:
             return current, colliders, contacts
-        bounds = [world_bounds(n, self._local_for(n.mesh)) for n in nodes]
+        locals_ = [self._local_for(n.mesh) for n in nodes]
+        bounds = [world_bounds(n, locals_[i]) for i, n in enumerate(nodes)]
         boxes = [aabb_of(bd) for bd in bounds]
         for i, j in self._candidate_pairs(nodes, boxes):
             a, b = nodes[i], nodes[j]
@@ -383,9 +484,17 @@ class CollisionSystem:
                 colliders.setdefault(ib, []).append(a)
             if a.solid and b.solid:  # resolve
                 inv_a, inv_b = self._inv_mass(a), self._inv_mass(b)
-                if inv_a + inv_b > 0.0:
+                invIa = _inv_inertia(a, locals_[i][3] * a.scale)
+                invIb = _inv_inertia(b, locals_[j][3] * b.scale)
+                if inv_a + inv_b + invIa + invIb > 0.0:
                     nrm, pen = contact(bounds[i], bounds[j])
-                    contacts.append((a, b, nrm[0], nrm[1], nrm[2], pen, inv_a, inv_b))
+                    ca, cb = _body_centre(bounds[i]), _body_centre(bounds[j])
+                    reach_a, reach_b = _reach_along(bounds[i], nrm), _reach_along(bounds[j], nrm)
+                    # contact point: midpoint of each body's surface point along n
+                    pa = (ca[0] + nrm[0] * reach_a, ca[1] + nrm[1] * reach_a, ca[2] + nrm[2] * reach_a)
+                    pb = (cb[0] - nrm[0] * reach_b, cb[1] - nrm[1] * reach_b, cb[2] - nrm[2] * reach_b)
+                    cp = ((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2)
+                    contacts.append(Contact(a, b, nrm, pen, inv_a, inv_b, invIa, invIb, ca, cb, cp))
         return current, colliders, contacts
 
     def _substeps(self, nodes, dt) -> int:

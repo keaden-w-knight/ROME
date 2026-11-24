@@ -78,9 +78,11 @@ class Node:
     solid: bool = False
     static_body: bool = False
     velocity: Vec3 = (0.0, 0.0, 0.0)
+    angular_velocity: Vec3 = (0.0, 0.0, 0.0)  # Euler rad/sec; off-centre hits spin it
     mass: float = 1.0
     restitution: float = 0.2  # bounciness, 0 (dead stop) .. 1 (full bounce)
     friction: float = 0.0  # tangential friction coefficient (0 = frictionless)
+    angular_damping: float = 0.0  # per-second spin decay (0 = spins forever)
     # Per-node event dispatcher; collision events fire here. Excluded from the
     # dataclass's equality/repr so two nodes aren't "equal" by their listeners.
     events: Events = field(default_factory=Events, compare=False, repr=False)
@@ -201,15 +203,18 @@ class Scene:
         solid: bool = False,
         static_body: bool = False,
         velocity: Vec3 = (0.0, 0.0, 0.0),
+        angular_velocity: Vec3 = (0.0, 0.0, 0.0),
         mass: float = 1.0,
         restitution: float = 0.2,
         friction: float = 0.0,
+        angular_damping: float = 0.0,
     ) -> Node:
         node = Node(
             mesh=mesh, position=position, rotation=rotation, scale=scale, color=color, name=name,
             visible=visible, collision=collision, collision_shape=collision_shape, layers=layers,
-            solid=solid, static_body=static_body, velocity=velocity, mass=mass,
-            restitution=restitution, friction=friction,
+            solid=solid, static_body=static_body, velocity=velocity,
+            angular_velocity=angular_velocity, mass=mass, restitution=restitution,
+            friction=friction, angular_damping=angular_damping,
         )
         self.nodes.append(node)
         return node
