@@ -36,6 +36,11 @@ class Event:
     key: str | None = None
     dx: float = 0.0
     dy: float = 0.0
+    # Collision events (fired on a node, see rome.physics): the node the listener
+    # is on, the other collider, and every node this one overlaps this frame.
+    node: Any = None
+    other: Any = None
+    others: Any = ()
 
 
 Listener = Callable[..., None]

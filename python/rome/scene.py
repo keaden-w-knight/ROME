@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .events import _NO_THIS, Events
+
 Vec3 = tuple[float, float, float]
 
 
@@ -66,6 +68,19 @@ class Node:
     scale: float = 1.0
     color: Vec3 = (0.62, 0.68, 0.82)  # linear RGB 0..1 (GPU backends; ASCII ignores it)
     name: str | None = None
+    visible: bool = True  # False hides the node from drawing (it still collides)
+    collision: bool = False  # opt in to collision tests
+    collision_shape: str = "aabb"  # "aabb" | "sphere"
+    layers: Any = (0,)  # only nodes sharing a layer are tested (see rome.physics)
+    # Per-node event dispatcher; collision events fire here. Excluded from the
+    # dataclass's equality/repr so two nodes aren't "equal" by their listeners.
+    events: Events = field(default_factory=Events, compare=False, repr=False)
+
+    def on(self, event_type: str, callback=None, this=_NO_THIS):
+        """Register an event listener on this node (chiefly ``"collision"`` and
+        ``"collision_exit"``). Same shape as ``app.on`` — direct call or decorator,
+        with an optional ``this`` handed to the listener as a second argument."""
+        return self.events.on(event_type, callback, this)
 
 
 _LIGHT_KIND = {"directional": 0, "point": 1, "spot": 2}
@@ -170,9 +185,14 @@ class Scene:
         scale: float = 1.0,
         color: Vec3 = (0.62, 0.68, 0.82),
         name: str | None = None,
+        visible: bool = True,
+        collision: bool = False,
+        collision_shape: str = "aabb",
+        layers: Any = (0,),
     ) -> Node:
         node = Node(
-            mesh=mesh, position=position, rotation=rotation, scale=scale, color=color, name=name
+            mesh=mesh, position=position, rotation=rotation, scale=scale, color=color, name=name,
+            visible=visible, collision=collision, collision_shape=collision_shape, layers=layers,
         )
         self.nodes.append(node)
         return node

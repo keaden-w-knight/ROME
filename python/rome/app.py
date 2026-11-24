@@ -21,6 +21,7 @@ from .backends import DEFAULT_BACKEND, BackendConfig, create_backend
 from .camera import Camera
 from .events import _NO_THIS, Event, Events
 from .input import InputState
+from .physics import CollisionSystem
 from .scene import Hud, Scene
 
 
@@ -46,6 +47,7 @@ class App:
             BackendConfig(width=width, height=height, title=title, clear_color=clear_color, vsync=vsync),
         )
         self.events = Events()  # register listeners with app.on(type, fn)
+        self.physics = CollisionSystem()  # per-node collision events each tick
         self.input = InputState.empty()
         self._prev_held: frozenset = frozenset()
         self._last = time.perf_counter()
@@ -87,6 +89,7 @@ class App:
         self._last = now
         self.input = self._backend.poll_input()
         self._dispatch_events()
+        self.physics.step(self.scene, self)  # fire collision / collision_exit events
         return self.running
 
     def _dispatch_events(self) -> None:

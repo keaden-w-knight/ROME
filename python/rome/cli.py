@@ -342,6 +342,35 @@ def on_key(event):
 
 `main.py` ships a Space-to-toggle-a-HUD-marker example. See **[docs/EVENTS.md](docs/EVENTS.md)**
 for the full event list and keep it updated as you add your own.
+
+## Collision
+
+Opt a node in with `collision=True` and give it `layers`; two nodes are only
+tested when they **share a layer** (so bullets-vs-enemies never costs you a
+walls-vs-walls check). Pick a bound per object with `collision_shape`:
+
+```python
+player = scene.add(rome.Mesh.sphere(), collision=True, collision_shape="sphere",
+                   layers=("player",))
+pickup = scene.add(rome.Mesh.cube(), collision=True, layers=("player", "items"))
+```
+
+| Field | Meaning |
+|---|---|
+| `collision` | `False` by default; `True` to take part in collision tests |
+| `collision_shape` | `"aabb"` (box, the default) or `"sphere"` |
+| `layers` | any hashables; only nodes sharing one are tested (default `(0,)`) |
+| `visible` | `False` hides a node from drawing — **it still collides** |
+
+Listen on the **node itself** (not `app`): `collision` fires once when two nodes
+begin overlapping, `collision_exit` once when they separate. The event carries
+`node` (the one you attached to), `other` (what it hit), and `others` (everything
+it overlaps this frame).
+
+```python
+pickup.on("collision", lambda e: e.node.collect() if e.other is player else None)
+enemy.on("collision_exit", lambda e, hud: hud.clear(), app.hud)  # event + "this"
+```
 """
 
 _EVENTS_DOC = """\
@@ -382,6 +411,19 @@ Remove a listener with `app.events.off("update", fn)`.
 Every event also carries `app` (reach the scene / camera / hud) and `input` (the
 current `InputState`). Key names: lowercase letters, `escape`, `space`, `enter`;
 arrow keys report as `w`/`a`/`s`/`d`.
+
+## Node (collision) events
+
+These fire on a **node**, registered with `node.on(...)` rather than `app.on(...)`,
+once per frame the state changes (see the Collision section of the README):
+
+| Type             | Fired when                          | Fields                   |
+|------------------|-------------------------------------|--------------------------|
+| `collision`      | two nodes begin overlapping         | `node`, `other`, `others`|
+| `collision_exit` | two overlapping nodes separate      | `node`, `other`, `others`|
+
+`node` is the node the listener is on, `other` is the collider, and `others` is
+every node it overlaps this frame. Same lambda / optional-`this` shape as above.
 
 ## Your game's events
 

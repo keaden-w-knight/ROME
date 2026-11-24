@@ -65,6 +65,7 @@ class VulkanBackend(Backend):
         instances = [
             (self._realize(node.mesh), node.position, node.rotation, node.scale, node.color)
             for node in scene.nodes
+            if node.visible
         ]
         self._running = self._app.render_scene(
             instances,
@@ -84,6 +85,7 @@ class VulkanBackend(Backend):
         instances = [
             (self._realize(node.mesh), node.position, node.rotation, node.scale, node.color)
             for node in scene.nodes
+            if node.visible
         ]
         return self._app.render_to_image(
             instances,

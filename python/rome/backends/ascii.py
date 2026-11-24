@@ -83,6 +83,8 @@ class AsciiBackend(Backend):
         ta = self._ta
         s = ta.Scene()
         for node in scene.nodes:
+            if not node.visible:
+                continue
             s.add(
                 self._realize(node.mesh),
                 position=node.position,
