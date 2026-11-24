@@ -34,6 +34,15 @@ def _as_set(layers) -> set:
     return {layers}
 
 
+def _median(values) -> float:
+    s = sorted(values)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
 def local_bounds(positions):
     """From flat xyz positions: (min, max, centre, radius) in the mesh's own
     space. Computed once per mesh and cached by the CollisionSystem."""
@@ -132,14 +141,28 @@ def overlap(a, b) -> bool:
     return _sphere_aabb(b[1], b[2], a[1], a[2])  # aabb vs sphere
 
 
+def aabb_of(bound):
+    """The axis-aligned (min, max) box enclosing a tagged bound — a sphere's is
+    its centre ± radius. Used by the broadphase grid, which is boxes-only."""
+    if bound[0] == "aabb":
+        return bound[1], bound[2]
+    c, r = bound[1], bound[2]
+    return (c[0] - r, c[1] - r, c[2] - r), (c[0] + r, c[1] + r, c[2] + r)
+
+
 class CollisionSystem:
     """Steps collisions once per frame: fits each colliding node's bound, tests
     the pairs that share a layer, and fires enter/exit events. Caches each mesh's
     local bound by identity and remembers which pairs overlapped last frame."""
 
+    #: below this many colliding nodes, brute force is cheaper than hashing.
+    brute_threshold = 48
+
     def __init__(self) -> None:
         self._local: dict[int, tuple] = {}  # id(mesh) -> local bounds
         self._prev: dict[tuple, tuple] = {}  # pair key -> (node_a, node_b)
+        self.cell_size: float | None = None  # None = auto (from the typical object)
+        self.use_grid = True  # False forces brute force (used by tests for parity)
 
     def _local_for(self, mesh):
         key = id(mesh)
@@ -151,26 +174,64 @@ class CollisionSystem:
             self._local[key] = cached
         return cached
 
+    def _candidate_pairs(self, nodes, boxes):
+        """Index pairs worth a precise test. Brute force for a few nodes; above
+        ``brute_threshold`` a uniform spatial hash, so far-apart nodes are never
+        compared — ~O(n) for evenly-spread scenes instead of O(n²).
+
+        ``boxes[i]`` is node i's (min, max) AABB. The cell is sized from the
+        typical (median) object; the rare node much larger than a cell (a ground
+        plane) is pulled out and tested against everyone, so one big object can't
+        collapse the grid back to O(n²)."""
+        n = len(nodes)
+        if n < self.brute_threshold or not self.use_grid:
+            return [(i, j) for i in range(n) for j in range(i + 1, n)]
+
+        extents = [max(mx[k] - mn[k] for k in range(3)) / 2 for mn, mx in boxes]
+        cell = self.cell_size or 2.0 * _median(extents)
+        cell = max(cell, 1e-6)
+
+        grid: dict[tuple, list[int]] = {}
+        large: list[int] = []
+        for i, (mn, mx) in enumerate(boxes):
+            if extents[i] > cell:  # bigger than a cell: brute-force it instead
+                large.append(i)
+                continue
+            for cx in range(int(mn[0] // cell), int(mx[0] // cell) + 1):
+                for cy in range(int(mn[1] // cell), int(mx[1] // cell) + 1):
+                    for cz in range(int(mn[2] // cell), int(mx[2] // cell) + 1):
+                        grid.setdefault((cx, cy, cz), []).append(i)
+
+        pairs: set[tuple[int, int]] = set()
+        for bucket in grid.values():
+            for bi in range(len(bucket)):
+                for bj in range(bi + 1, len(bucket)):
+                    a, b = bucket[bi], bucket[bj]
+                    pairs.add((a, b) if a < b else (b, a))
+        for i in large:  # large nodes vs everyone (they're few)
+            for j in range(n):
+                if j != i:
+                    pairs.add((i, j) if i < j else (j, i))
+        return pairs
+
     def step(self, scene, app) -> None:
         nodes = [n for n in scene.nodes if getattr(n, "collision", False)]
 
         current: dict[tuple, tuple] = {}
         colliders: dict[int, list] = {}
         if len(nodes) >= 2:
-            bounds = {id(n): world_bounds(n, self._local_for(n.mesh)) for n in nodes}
-            for i in range(len(nodes)):
-                a = nodes[i]
-                la = _as_set(a.layers)
-                for j in range(i + 1, len(nodes)):
-                    b = nodes[j]
-                    if la.isdisjoint(_as_set(b.layers)):
-                        continue
-                    if overlap(bounds[id(a)], bounds[id(b)]):
-                        ia, ib = id(a), id(b)
-                        key = (ia, ib) if ia < ib else (ib, ia)
-                        current[key] = (a, b)
-                        colliders.setdefault(ia, []).append(b)
-                        colliders.setdefault(ib, []).append(a)
+            bounds = [world_bounds(n, self._local_for(n.mesh)) for n in nodes]
+            boxes = [aabb_of(bd) for bd in bounds]
+            for i, j in self._candidate_pairs(nodes, boxes):
+                a, b = nodes[i], nodes[j]
+                if _as_set(a.layers).isdisjoint(_as_set(b.layers)):
+                    continue
+                if overlap(bounds[i], bounds[j]):
+                    ia, ib = id(a), id(b)
+                    key = (ia, ib) if ia < ib else (ib, ia)
+                    current[key] = (a, b)
+                    colliders.setdefault(ia, []).append(b)
+                    colliders.setdefault(ib, []).append(a)
 
         # Enter: overlapping now but not last frame.
         for key, (a, b) in current.items():
