@@ -419,9 +419,16 @@ ball  = scene.add(rome.Mesh.sphere(), position=(0,5,0), collision_shape="sphere"
 | `friction` | tangential friction `0`..`1` (slows sliding along a surface) |
 
 Tune the solver on `app.physics`: `gravity`, `solver_iterations` (stiffer stacks),
-`position_correction`/`slop` (how hard penetration is pushed out), and `max_dt`
-(caps the step so a long frame can't tunnel bodies through each other). A
-**non-solid** collider is a pure *trigger* — it fires events but never pushes.
+`position_correction`/`slop` (how hard penetration is pushed out), `max_dt` (caps
+the step), and `ccd`/`max_substeps` (continuous collision — a fast body is stepped
+in pieces so it can't jump through a thin wall; on by default, only kicks in when
+something's moving fast). A **non-solid** collider is a pure *trigger* — it fires
+events but never pushes.
+
+The player (`game/player.py`) is a `rome.CharacterController` rather than a dynamic
+body: a kinematic sphere that slides along solids. Move it with `body.move(delta,
+scene)` — it substeps long moves for the same no-tunnelling reason. That's the
+right tool for a character; dynamic solids are for props, projectiles and debris.
 """
 
 _EVENTS_DOC = """\

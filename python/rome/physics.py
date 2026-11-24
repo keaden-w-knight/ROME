@@ -240,6 +240,12 @@ class CollisionSystem:
         self.position_correction = 0.8
         self.slop = 0.01
         self.max_dt = 0.05
+        # Continuous collision via substepping: when a solid mover would travel
+        # far relative to its own size in one frame, split the frame so it can't
+        # jump through a thin wall. Costs an extra detect per substep, so it only
+        # kicks in for genuinely fast bodies (normal frames stay a single step).
+        self.ccd = True
+        self.max_substeps = 8
 
     @staticmethod
     def _inv_mass(node) -> float:
@@ -352,6 +358,58 @@ class CollisionSystem:
                     pairs.add((i, j) if i < j else (j, i))
         return pairs
 
+    def _detect(self, nodes):
+        """One broadphase + narrowphase pass over the current positions. Returns
+        the event pairs (``current``, ``colliders``) and the solid-solid
+        ``contacts`` to resolve."""
+        current: dict[tuple, tuple] = {}
+        colliders: dict[int, list] = {}
+        contacts: list = []
+        if len(nodes) < 2:
+            return current, colliders, contacts
+        bounds = [world_bounds(n, self._local_for(n.mesh)) for n in nodes]
+        boxes = [aabb_of(bd) for bd in bounds]
+        for i, j in self._candidate_pairs(nodes, boxes):
+            a, b = nodes[i], nodes[j]
+            if _as_set(a.layers).isdisjoint(_as_set(b.layers)):
+                continue
+            if not overlap(bounds[i], bounds[j]):
+                continue
+            if a.collision and b.collision:  # fire events
+                ia, ib = id(a), id(b)
+                key = (ia, ib) if ia < ib else (ib, ia)
+                current[key] = (a, b)
+                colliders.setdefault(ia, []).append(b)
+                colliders.setdefault(ib, []).append(a)
+            if a.solid and b.solid:  # resolve
+                inv_a, inv_b = self._inv_mass(a), self._inv_mass(b)
+                if inv_a + inv_b > 0.0:
+                    nrm, pen = contact(bounds[i], bounds[j])
+                    contacts.append((a, b, nrm[0], nrm[1], nrm[2], pen, inv_a, inv_b))
+        return current, colliders, contacts
+
+    def _substeps(self, nodes, dt) -> int:
+        """How many substeps this frame needs so no solid mover travels more than
+        ~half its own size in one — the continuous-collision guard. 1 unless
+        something is moving fast."""
+        if not self.ccd or dt <= 0.0:
+            return 1
+        sub = 1
+        for n in nodes:
+            if not n.solid or n.static_body:
+                continue
+            vx, vy, vz = n.velocity
+            disp = math.sqrt(vx * vx + vy * vy + vz * vz) * dt
+            if disp <= 0.0:
+                continue
+            ext = _mesh_local_bounds(n.mesh, self._local)[3] * n.scale  # ~radius
+            if ext <= 0.0:
+                continue
+            need = math.ceil(disp / (ext * 0.5))
+            if need > sub:
+                sub = need
+        return min(sub, self.max_substeps)
+
     def step(self, scene, app) -> None:
         # A node is in the physics world if it collides (fires events) or is solid
         # (gets resolved); solids are integrated before anything is detected.
@@ -360,34 +418,23 @@ class CollisionSystem:
             if getattr(n, "collision", False) or getattr(n, "solid", False)
         ]
         dt = min(max(getattr(app, "dt", 0.0), 0.0), self.max_dt)
-        self._integrate(nodes, dt)
 
-        current: dict[tuple, tuple] = {}
-        colliders: dict[int, list] = {}
-        contacts: list = []
-        if len(nodes) >= 2:
-            bounds = [world_bounds(n, self._local_for(n.mesh)) for n in nodes]
-            boxes = [aabb_of(bd) for bd in bounds]
-            for i, j in self._candidate_pairs(nodes, boxes):
-                a, b = nodes[i], nodes[j]
-                if _as_set(a.layers).isdisjoint(_as_set(b.layers)):
-                    continue
-                if not overlap(bounds[i], bounds[j]):
-                    continue
-                if a.collision and b.collision:  # fire events
-                    ia, ib = id(a), id(b)
-                    key = (ia, ib) if ia < ib else (ib, ia)
-                    current[key] = (a, b)
-                    colliders.setdefault(ia, []).append(b)
-                    colliders.setdefault(ib, []).append(a)
-                if a.solid and b.solid:  # resolve
-                    inv_a, inv_b = self._inv_mass(a), self._inv_mass(b)
-                    if inv_a + inv_b > 0.0:
-                        nrm, pen = contact(bounds[i], bounds[j])
-                        contacts.append((a, b, nrm[0], nrm[1], nrm[2], pen, inv_a, inv_b))
-
-        if contacts:
-            self._resolve(contacts)
+        sub = self._substeps(nodes, dt)
+        if sub == 1:
+            self._integrate(nodes, dt)
+            current, colliders, contacts = self._detect(nodes)
+            if contacts:
+                self._resolve(contacts)
+        else:
+            # Substep integrate+resolve so a fast body can't tunnel; detect once
+            # more at the end for the frame's enter/exit events.
+            hdt = dt / sub
+            for _ in range(sub):
+                self._integrate(nodes, hdt)
+                _, _, contacts = self._detect(nodes)
+                if contacts:
+                    self._resolve(contacts)
+            current, colliders, _ = self._detect(nodes)
 
         # Enter: overlapping now but not last frame.
         for key, (a, b) in current.items():
@@ -427,26 +474,18 @@ class CharacterController:
     pins the height, which is what you want for a ground walker with no gravity."""
 
     def __init__(self, position, radius: float = 0.4, layers=(0,), max_slides: int = 4,
-                 plane_lock: bool = False) -> None:
+                 plane_lock: bool = False, max_substeps: int = 8) -> None:
         self.position = tuple(position)
         self.radius = radius
         self.layers = layers
         self.max_slides = max_slides  # resolve passes (corners need more than one)
         self.plane_lock = plane_lock
+        self.max_substeps = max_substeps  # split a long move so it can't tunnel
         self._local: dict[int, tuple] = {}
 
-    def move(self, delta, scene):
-        """Advance by ``delta`` then slide out of any solid node. Returns (and
-        stores on ``self.position``) the resolved position. Only nodes that are
-        ``solid`` and share a layer are considered."""
-        start_y = self.position[1]
-        p = (self.position[0] + delta[0], self.position[1] + delta[1], self.position[2] + delta[2])
-        la = _as_set(self.layers)
-        solids = [
-            n for n in scene.nodes
-            if getattr(n, "solid", False)
-            and not la.isdisjoint(_as_set(getattr(n, "layers", (0,))))
-        ]
+    def _slide(self, p, solids):
+        """Push a sphere at ``p`` out of every solid it overlaps, a few passes so
+        corners settle. Tangential motion is untouched, which is the slide."""
         for _ in range(self.max_slides):
             hit = False
             for n in solids:
@@ -459,6 +498,28 @@ class CharacterController:
                 hit = True
             if not hit:
                 break
+        return p
+
+    def move(self, delta, scene):
+        """Advance by ``delta`` then slide out of any solid node. A long move is
+        split into substeps so it can't jump through a thin wall. Returns (and
+        stores on ``self.position``) the resolved position. Only nodes that are
+        ``solid`` and share a layer are considered."""
+        start_y = self.position[1]
+        la = _as_set(self.layers)
+        solids = [
+            n for n in scene.nodes
+            if getattr(n, "solid", False)
+            and not la.isdisjoint(_as_set(getattr(n, "layers", (0,))))
+        ]
+        dist = math.sqrt(delta[0] ** 2 + delta[1] ** 2 + delta[2] ** 2)
+        steps = 1
+        if self.radius > 0.0 and dist > 0.0:
+            steps = min(self.max_substeps, max(1, math.ceil(dist / (self.radius * 0.5))))
+        sx, sy, sz = delta[0] / steps, delta[1] / steps, delta[2] / steps
+        p = self.position
+        for _ in range(steps):
+            p = self._slide((p[0] + sx, p[1] + sy, p[2] + sz), solids)
         if self.plane_lock:
             p = (p[0], start_y, p[2])
         self.position = p
