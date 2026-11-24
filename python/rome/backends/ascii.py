@@ -49,6 +49,15 @@ class AsciiBackend(Backend):
         # back to a sensible default for window-sized values.
         self._w = config.width if 0 < config.width < 400 else 100
         self._h = config.height if 0 < config.height < 200 else 44
+        # Never let the grid exceed the real terminal: a frame taller than the
+        # window scrolls every row and flickers. Clamp down to what fits, leaving
+        # one row spare at the bottom — but only down, so an explicit small grid is
+        # kept. The fallback leaves a non-tty (piped/captured) output unchanged.
+        import shutil
+
+        cols, rows = shutil.get_terminal_size(fallback=(self._w, self._h + 1))
+        self._w = max(1, min(self._w, cols))
+        self._h = max(1, min(self._h, rows - 1))
         _enable_ansi()
         self._poll = _make_key_reader()
         sys.stdout.write("\x1b[2J\x1b[?25l")  # clear, hide cursor
@@ -104,6 +113,12 @@ class AsciiBackend(Backend):
             lights=[light.to_tuple() for light in scene.lights],
             ambient=scene.ambient,
         )
+        # Drop the trailing newline three_ascii appends to the last row. The frame
+        # homes the cursor (\x1b[H) and overwrites in place without clearing, so a
+        # final newline past the bottom row forces the terminal to scroll one line;
+        # the next frame homes into the scrolled view and the whole image shimmers.
+        if frame.endswith("\n"):
+            frame = frame[:-1]
         if hud is not None and hud.items:
             frame = self._composite_hud(frame, hud.items)
         sys.stdout.write(frame)
