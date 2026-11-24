@@ -30,6 +30,7 @@ from .camera import Camera
 from .events import Event, Events
 from .image import save_png
 from .input import InputState
+from .physics import CharacterController, CollisionSystem
 from .scene import Hud, Light, Mesh, Node, Scene
 
 try:  # version comes from installed package metadata when available
@@ -53,6 +54,8 @@ __all__ = [
     "InputState",
     "Events",
     "Event",
+    "CharacterController",
+    "CollisionSystem",
     "save_png",
     "available_backends",
     "create_backend",

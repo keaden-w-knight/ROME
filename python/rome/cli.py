@@ -56,6 +56,7 @@ def main() -> None:
         fov=p["fov"],
         speed=p["speed"],
         sensitivity=p["sensitivity"],
+        radius=p.get("radius", 0.4),
     )
 
     app = rome.App(
@@ -77,7 +78,7 @@ def main() -> None:
         if app.input.down("escape"):
             app.close()
             return
-        player.update(app.dt, app.input)
+        player.update(app.dt, app.input, app.scene)
         app.camera = player.camera
 
         stats["time"] += app.dt
@@ -125,13 +126,17 @@ import rome
 def build_scene(root: Path, cfg: dict) -> rome.Scene:
     scene = rome.Scene()
 
-    # A ground to walk on, and a few objects to walk around. Make it your own.
+    # A ground to walk on, and a few objects to walk around. The obstacles are
+    # `solid=True` so the player (a rome.CharacterController) bumps and slides
+    # along them instead of walking through; `static_body=True` means they never
+    # move. Drop `solid=` to make something walk-through-able scenery.
     scene.add(rome.Mesh.plane(), scale=14.0, color=(0.28, 0.30, 0.34))
-    scene.add(rome.Mesh.sphere(), position=(-2.5, 1.0, 3.0), color=(0.80, 0.40, 0.40))
-    scene.add(rome.Mesh.cube(), position=(2.5, 1.0, 4.0), rotation=(0.0, 0.5, 0.0),
-              color=(0.45, 0.60, 0.88))
-    scene.add(rome.Mesh.sphere(20, 14), position=(0.0, 0.8, 7.0), scale=0.8,
-              color=(0.5, 0.8, 0.5))
+    scene.add(rome.Mesh.sphere(), position=(-2.5, 1.2, 3.0), scale=1.2,
+              color=(0.80, 0.40, 0.40), collision=True, solid=True, static_body=True)
+    scene.add(rome.Mesh.cube(), position=(2.5, 1.2, 4.0), rotation=(0.0, 0.5, 0.0), scale=1.2,
+              color=(0.45, 0.60, 0.88), collision=True, solid=True, static_body=True)
+    scene.add(rome.Mesh.cube(), position=(0.0, 1.2, 7.0), scale=1.4,
+              color=(0.5, 0.8, 0.5), collision=True, solid=True, static_body=True)
 
     # Any .obj / .glb / .gltf dropped in assets/ is loaded automatically.
     assets = root / "assets"
@@ -153,10 +158,15 @@ def build_scene(root: Path, cfg: dict) -> rome.Scene:
 '''
 
 _PLAYER = '''\
-"""Player control: an FPS-style free-look camera. Make it your own.
+"""Player control: an FPS-style free-look camera that collides with the world.
 
 WASD / arrow keys move; the mouse looks around (GPU backend). In the terminal
 there's no mouse, so Q / E turn instead.
+
+Movement goes through a rome.CharacterController — a kinematic sphere that slides
+along solid nodes instead of walking through them (set `solid=True` on the things
+you want to block the player; see game/world.py). `plane_lock` keeps the eye at a
+fixed height, so this is a flat walker; drop it (and feed gravity) for falling.
 """
 from __future__ import annotations
 
@@ -174,8 +184,9 @@ class Player:
         fov: float = 60.0,
         speed: float = 4.0,
         sensitivity: float = 0.0025,
+        radius: float = 0.4,
     ) -> None:
-        self.x, self.y, self.z = position
+        self.body = rome.CharacterController(position, radius=radius, plane_lock=True)
         self.yaw = yaw
         self.pitch = pitch
         self.fov = fov
@@ -183,16 +194,21 @@ class Player:
         self.sensitivity = sensitivity
         self._refresh()
 
+    @property
+    def position(self) -> tuple[float, float, float]:
+        return self.body.position
+
     def _refresh(self) -> None:
+        x, y, z = self.body.position
         cp = math.cos(self.pitch)
         fwd = (-math.sin(self.yaw) * cp, math.sin(self.pitch), math.cos(self.yaw) * cp)
         self.camera = rome.Camera(
-            position=(self.x, self.y, self.z),
-            target=(self.x + fwd[0], self.y + fwd[1], self.z + fwd[2]),
+            position=(x, y, z),
+            target=(x + fwd[0], y + fwd[1], z + fwd[2]),
             fov=self.fov,
         )
 
-    def update(self, dt: float, input: rome.InputState) -> None:
+    def update(self, dt: float, input: rome.InputState, scene: rome.Scene) -> None:
         # Look: mouse (GPU) or Q/E to turn (terminal fallback).
         self.yaw += input.mouse_dx * self.sensitivity
         self.pitch -= input.mouse_dy * self.sensitivity
@@ -210,8 +226,9 @@ class Player:
         forward = (1.0 if input.down("w") else 0.0) - (1.0 if input.down("s") else 0.0)
         strafe = (1.0 if input.down("d") else 0.0) - (1.0 if input.down("a") else 0.0)
         step = self.speed * dt
-        self.x += (fx * forward + rx * strafe) * step
-        self.z += (fz * forward + rz * strafe) * step
+        delta = ((fx * forward + rx * strafe) * step, 0.0, (fz * forward + rz * strafe) * step)
+        # Hand the intended move to the controller; it slides us out of any solid.
+        self.body.move(delta, scene)
         self._refresh()
 '''
 
@@ -231,11 +248,13 @@ width = __WIDTH__
 height = __HEIGHT__
 
 [player]
-# Starting position (x, y, z), field of view, move speed, mouse sensitivity.
+# Starting position (x, y, z), field of view, move speed, mouse sensitivity,
+# and the collision radius (how close you can get to a solid object).
 start = [0.0, 1.6, -6.0]
 fov = 60.0
 speed = 4.0
 sensitivity = 0.0025
+radius = 0.4
 """
 
 _README = """\

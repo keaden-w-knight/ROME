@@ -34,6 +34,19 @@ def _as_set(layers) -> set:
     return {layers}
 
 
+def _mesh_local_bounds(mesh, cache):
+    """A mesh's local (min, max, centre, radius) bounds, cached by identity. Shared
+    by the collision system and the character controller."""
+    key = id(mesh)
+    v = cache.get(key)
+    if v is None:
+        from . import geometry  # deferred: avoid an import cycle at module load
+
+        v = local_bounds(geometry.from_mesh(mesh).positions)
+        cache[key] = v
+    return v
+
+
 def _median(values) -> float:
     s = sorted(values)
     n = len(s)
@@ -297,14 +310,7 @@ class CollisionSystem:
             b.position = (bx + nx * corr * inv_b, by + ny * corr * inv_b, bz + nz * corr * inv_b)
 
     def _local_for(self, mesh):
-        key = id(mesh)
-        cached = self._local.get(key)
-        if cached is None:
-            from . import geometry  # deferred: avoid import cycle at module load
-
-            cached = local_bounds(geometry.from_mesh(mesh).positions)
-            self._local[key] = cached
-        return cached
+        return _mesh_local_bounds(mesh, self._local)
 
     def _candidate_pairs(self, nodes, boxes):
         """Index pairs worth a precise test. Brute force for a few nodes; above
@@ -407,3 +413,53 @@ class CollisionSystem:
                 others=tuple(colliders.get(id(node), ())),
             )
         )
+
+
+class CharacterController:
+    """A kinematic sphere you move explicitly, that slides along solid nodes
+    instead of passing through them — the usual way to drive a first- or
+    third-person character.
+
+    Unlike a dynamic solid body it never bounces, tips, or drifts, so input maps
+    straight to motion: compute where you want to go and call ``move``; it resolves
+    out of any solid it would end up inside, keeping the motion that runs *along*
+    the surface (so you slide round a wall rather than sticking to it). ``plane_lock``
+    pins the height, which is what you want for a ground walker with no gravity."""
+
+    def __init__(self, position, radius: float = 0.4, layers=(0,), max_slides: int = 4,
+                 plane_lock: bool = False) -> None:
+        self.position = tuple(position)
+        self.radius = radius
+        self.layers = layers
+        self.max_slides = max_slides  # resolve passes (corners need more than one)
+        self.plane_lock = plane_lock
+        self._local: dict[int, tuple] = {}
+
+    def move(self, delta, scene):
+        """Advance by ``delta`` then slide out of any solid node. Returns (and
+        stores on ``self.position``) the resolved position. Only nodes that are
+        ``solid`` and share a layer are considered."""
+        start_y = self.position[1]
+        p = (self.position[0] + delta[0], self.position[1] + delta[1], self.position[2] + delta[2])
+        la = _as_set(self.layers)
+        solids = [
+            n for n in scene.nodes
+            if getattr(n, "solid", False)
+            and not la.isdisjoint(_as_set(getattr(n, "layers", (0,))))
+        ]
+        for _ in range(self.max_slides):
+            hit = False
+            for n in solids:
+                bound = world_bounds(n, _mesh_local_bounds(n.mesh, self._local))
+                nrm, pen = contact(("sphere", p, self.radius), bound)  # normal sphere→node
+                if pen <= 0.0:
+                    continue  # not actually overlapping this one
+                # push the sphere out, opposite the toward-node normal
+                p = (p[0] - nrm[0] * pen, p[1] - nrm[1] * pen, p[2] - nrm[2] * pen)
+                hit = True
+            if not hit:
+                break
+        if self.plane_lock:
+            p = (p[0], start_y, p[2])
+        self.position = p
+        return p
