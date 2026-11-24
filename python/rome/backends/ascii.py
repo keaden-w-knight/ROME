@@ -44,20 +44,22 @@ class AsciiBackend(Backend):
         import three_ascii as ta  # deferred: only needed for this backend
 
         self._ta = ta
-        # The config width/height are pixels for a window; for the terminal they
-        # are character columns/rows, so treat small numbers as a grid and fall
-        # back to a sensible default for window-sized values.
-        self._w = config.width if 0 < config.width < 400 else 100
-        self._h = config.height if 0 < config.height < 200 else 44
-        # Never let the grid exceed the real terminal: a frame taller than the
-        # window scrolls every row and flickers. Clamp down to what fits, leaving
-        # one row spare at the bottom — but only down, so an explicit small grid is
-        # kept. The fallback leaves a non-tty (piped/captured) output unchanged.
+        # The grid must match the terminal's real proportions. three_ascii bakes a
+        # ~2:1 character-cell ratio into its projection, so only a grid shaped like
+        # the terminal keeps spheres round and the view un-clipped; a grid wider
+        # than the window also clips the scene, and one taller scrolls and flickers.
+        # So fill the actual terminal (one row spare at the bottom so the last line
+        # never scrolls). Only when there is no real terminal — output piped or
+        # captured — fall back to the configured grid (window-sized values, from a
+        # pixel config, become a sensible default).
         import shutil
 
-        cols, rows = shutil.get_terminal_size(fallback=(self._w, self._h + 1))
-        self._w = max(1, min(self._w, cols))
-        self._h = max(1, min(self._h, rows - 1))
+        cols, rows = shutil.get_terminal_size(fallback=(0, 0))
+        if cols > 0 and rows > 1:
+            self._w, self._h = cols, rows - 1
+        else:
+            self._w = config.width if 0 < config.width < 400 else 100
+            self._h = config.height if 0 < config.height < 200 else 44
         _enable_ansi()
         self._poll = _make_key_reader()
         sys.stdout.write("\x1b[2J\x1b[?25l")  # clear, hide cursor
