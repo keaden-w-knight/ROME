@@ -323,6 +323,66 @@ def _quat_integrate(q, omega, dt):
     return (r[0] / n, r[1] / n, r[2] / n, r[3] / n) if n > 0.0 else q
 
 
+# --- Swept sphere (exact time-of-impact). A sphere at p0 moving by v over a frame
+# (centre p0 + t·v, t in 0..1) against a static bound; returns (t, normal) at first
+# contact, normal pointing from the obstacle toward the sphere (the slide/push
+# direction), or None for no hit. Exact for sphere-sphere; sphere-box uses the
+# radius-inflated slab test (slightly boxy at rounded corners, never tunnels). ---
+
+def _sweep_sphere_sphere(p0, r, v, c, rb):
+    dx, dy, dz = p0[0] - c[0], p0[1] - c[1], p0[2] - c[2]
+    R = r + rb
+    a = v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
+    cc = dx * dx + dy * dy + dz * dz - R * R
+    if cc <= 0.0:  # already touching
+        d = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+        return 0.0, (dx / d, dy / d, dz / d)
+    if a < 1e-18:
+        return None  # not moving and not already overlapping
+    b = 2.0 * (dx * v[0] + dy * v[1] + dz * v[2])
+    disc = b * b - 4.0 * a * cc
+    if disc < 0.0:
+        return None
+    t = (-b - math.sqrt(disc)) / (2.0 * a)
+    if t < 0.0 or t > 1.0:
+        return None
+    hx, hy, hz = dx + t * v[0], dy + t * v[1], dz + t * v[2]
+    d = math.sqrt(hx * hx + hy * hy + hz * hz) or 1.0
+    return t, (hx / d, hy / d, hz / d)
+
+
+def _sweep_sphere_aabb(p0, r, v, b_min, b_max):
+    emin = (b_min[0] - r, b_min[1] - r, b_min[2] - r)
+    emax = (b_max[0] + r, b_max[1] + r, b_max[2] + r)
+    tmin, tmax = 0.0, 1.0
+    axis, sign = 0, 1.0
+    for k in range(3):
+        if abs(v[k]) < 1e-12:
+            if p0[k] < emin[k] or p0[k] > emax[k]:
+                return None  # parallel to this slab and outside it
+            continue
+        inv = 1.0 / v[k]
+        t1, t2, s = (emin[k] - p0[k]) * inv, (emax[k] - p0[k]) * inv, -1.0
+        if t1 > t2:
+            t1, t2, s = t2, t1, 1.0
+        if t1 > tmin:
+            tmin, axis, sign = t1, k, s
+        if t2 < tmax:
+            tmax = t2
+        if tmin > tmax:
+            return None
+    n = [0.0, 0.0, 0.0]
+    n[axis] = sign
+    return tmin, tuple(n)
+
+
+def sweep_sphere(p0, r, v, bound):
+    """Swept sphere vs a tagged bound → (toi, normal) or None (see above)."""
+    if bound[0] == "sphere":
+        return _sweep_sphere_sphere(p0, r, v, bound[1], bound[2])
+    return _sweep_sphere_aabb(p0, r, v, bound[1], bound[2])
+
+
 class CollisionSystem:
     """Steps collisions once per frame: fits each colliding node's bound, tests
     the pairs that share a layer, and fires enter/exit events. Caches each mesh's
@@ -368,9 +428,11 @@ class CollisionSystem:
             return 0.0
         return 1.0 / node.mass
 
-    def _integrate(self, participants, dt) -> None:
+    def _integrate(self, participants, dt, static_bounds=None) -> None:
         """Advance solid movers by their velocity (and gravity). Non-solid nodes
-        and static bodies are positioned by the game, so they're left alone."""
+        and static bodies are positioned by the game, so they're left alone. A
+        sphere mover is swept against the static world and stopped at its first
+        time-of-impact, so it can't tunnel a wall even in a single big step."""
         if dt <= 0.0:
             return
         gx, gy, gz = self.gravity
@@ -380,8 +442,20 @@ class CollisionSystem:
             vx, vy, vz = n.velocity
             vx, vy, vz = vx + gx * dt, vy + gy * dt, vz + gz * dt
             n.velocity = (vx, vy, vz)
+            dx, dy, dz = vx * dt, vy * dt, vz * dt
+            if static_bounds and n.collision_shape == "sphere" and (dx or dy or dz):
+                local = _mesh_local_bounds(n.mesh, self._local)
+                centre = _body_centre(world_bounds(n, local))
+                r = local[3] * n.scale
+                best_t = 1.0
+                for _s, sb in static_bounds:
+                    hit = sweep_sphere(centre, r, (dx, dy, dz), sb)
+                    if hit is not None and hit[0] < best_t:
+                        best_t = hit[0]
+                if best_t < 1.0:  # stop at the wall; the resolver bounces it
+                    dx, dy, dz = dx * best_t, dy * best_t, dz * best_t
             px, py, pz = n.position
-            n.position = (px + vx * dt, py + vy * dt, pz + vz * dt)
+            n.position = (px + dx, py + dy, pz + dz)
             # Angular: decay, then advance orientation by integrating the spin as a
             # quaternion (exact for any axis) and writing it back as Euler.
             wx, wy, wz = n.angular_velocity
@@ -578,6 +652,8 @@ class CollisionSystem:
         for n in nodes:
             if not n.solid or n.static_body:
                 continue
+            if n.collision_shape == "sphere":
+                continue  # sphere movers use exact swept CCD, not substeps
             vx, vy, vz = n.velocity
             disp = math.sqrt(vx * vx + vy * vy + vz * vz) * dt
             if disp <= 0.0:
@@ -666,20 +742,27 @@ class CollisionSystem:
         ]
         dt = min(max(getattr(app, "dt", 0.0), 0.0), self.max_dt)
 
+        # Static solids don't move, so their bounds are fixed for the whole frame —
+        # compute once for the swept sphere CCD in _integrate. Only when CCD is on.
+        static_bounds = [
+            (n, world_bounds(n, self._local_for(n.mesh)))
+            for n in nodes if n.solid and n.static_body
+        ] if self.ccd else []
+
         sub = self._substeps(nodes, dt)
         if sub == 1:
-            self._integrate(nodes, dt)
+            self._integrate(nodes, dt, static_bounds)
             current, colliders, contacts = self._detect(nodes)
             self._wake(contacts)
             active = self._active(contacts)
             if active:
                 self._resolve(active)
         else:
-            # Substep integrate+resolve so a fast body can't tunnel; detect once
-            # more at the end for the frame's enter/exit events.
+            # Substep non-sphere fast movers so they can't tunnel; detect once more
+            # at the end for the frame's enter/exit events. (Spheres are swept.)
             hdt = dt / sub
             for _ in range(sub):
-                self._integrate(nodes, hdt)
+                self._integrate(nodes, hdt, static_bounds)
                 _, _, contacts = self._detect(nodes)
                 self._wake(contacts)
                 active = self._active(contacts)
@@ -726,14 +809,15 @@ class CharacterController:
     the surface (so you slide round a wall rather than sticking to it). ``plane_lock``
     pins the height, which is what you want for a ground walker with no gravity."""
 
+    SKIN = 1e-3  # tiny gap kept off a surface so the next sweep doesn't re-hit it
+
     def __init__(self, position, radius: float = 0.4, layers=(0,), max_slides: int = 4,
-                 plane_lock: bool = False, max_substeps: int = 8) -> None:
+                 plane_lock: bool = False) -> None:
         self.position = tuple(position)
         self.radius = radius
         self.layers = layers
-        self.max_slides = max_slides  # resolve passes (corners need more than one)
+        self.max_slides = max_slides  # how many times a blocked move may redirect
         self.plane_lock = plane_lock
-        self.max_substeps = max_substeps  # split a long move so it can't tunnel
         self._local: dict[int, tuple] = {}
 
     def _slide(self, p, solids):
@@ -754,25 +838,41 @@ class CharacterController:
         return p
 
     def move(self, delta, scene):
-        """Advance by ``delta`` then slide out of any solid node. A long move is
-        split into substeps so it can't jump through a thin wall. Returns (and
-        stores on ``self.position``) the resolved position. Only nodes that are
-        ``solid`` and share a layer are considered."""
+        """Advance by ``delta``, sweeping (exact time-of-impact) against solids so
+        it can't tunnel a thin wall, and redirecting the leftover motion along each
+        surface it meets (the slide). Returns (and stores on ``self.position``) the
+        resolved position. Only ``solid`` nodes sharing a layer are considered."""
         start_y = self.position[1]
         la = _as_set(self.layers)
         solids = [
-            n for n in scene.nodes
+            (n, world_bounds(n, _mesh_local_bounds(n.mesh, self._local)))
+            for n in scene.nodes
             if getattr(n, "solid", False)
             and not la.isdisjoint(_as_set(getattr(n, "layers", (0,))))
         ]
-        dist = math.sqrt(delta[0] ** 2 + delta[1] ** 2 + delta[2] ** 2)
-        steps = 1
-        if self.radius > 0.0 and dist > 0.0:
-            steps = min(self.max_substeps, max(1, math.ceil(dist / (self.radius * 0.5))))
-        sx, sy, sz = delta[0] / steps, delta[1] / steps, delta[2] / steps
         p = self.position
-        for _ in range(steps):
-            p = self._slide((p[0] + sx, p[1] + sy, p[2] + sz), solids)
+        remaining = delta
+        for _ in range(self.max_slides + 1):
+            if remaining[0] ** 2 + remaining[1] ** 2 + remaining[2] ** 2 < 1e-12:
+                break
+            best = None
+            for _n, bound in solids:
+                hit = sweep_sphere(p, self.radius, remaining, bound)
+                if hit is not None and (best is None or hit[0] < best[0]):
+                    best = hit
+            if best is None:  # clear path: take the whole remaining move
+                p = (p[0] + remaining[0], p[1] + remaining[1], p[2] + remaining[2])
+                break
+            t, nrm = best
+            # advance to the contact, kept a hair off the surface
+            p = (p[0] + remaining[0] * t + nrm[0] * self.SKIN,
+                 p[1] + remaining[1] * t + nrm[1] * self.SKIN,
+                 p[2] + remaining[2] * t + nrm[2] * self.SKIN)
+            # slide: drop the into-surface part of what's left
+            lx, ly, lz = remaining[0] * (1 - t), remaining[1] * (1 - t), remaining[2] * (1 - t)
+            d = lx * nrm[0] + ly * nrm[1] + lz * nrm[2]
+            remaining = (lx - nrm[0] * d, ly - nrm[1] * d, lz - nrm[2] * d)
+        p = self._slide(p, [n for n, _b in solids])  # depenetrate any residual
         if self.plane_lock:
             p = (p[0], start_y, p[2])
         self.position = p

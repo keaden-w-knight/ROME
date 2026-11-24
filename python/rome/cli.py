@@ -429,10 +429,10 @@ near pitch ±90° — plenty for game tumbling, short of a rigid-body reference.
 
 Tune the solver on `app.physics`: `gravity`, `solver_iterations` (stiffer stacks),
 `position_correction`/`slop` (how hard penetration is pushed out), `max_dt` (caps
-the step), and `ccd`/`max_substeps` (continuous collision — a fast body is stepped
-in pieces so it can't jump through a thin wall; on by default, only kicks in when
-something's moving fast). A **non-solid** collider is a pure *trigger* — it fires
-events but never pushes.
+the step), and `ccd`/`max_substeps` (continuous collision so a fast body can't jump
+through a thin wall: a sphere is **swept** to its exact first point of contact,
+anything else is substepped; on by default, idle until something moves fast). A
+**non-solid** collider is a pure *trigger* — it fires events but never pushes.
 
 Resting bodies **sleep** (`sleeping`, `sleep_linear`/`sleep_angular`/`sleep_time`):
 a solid mover that stays still long enough is frozen — skipped by the solver, so a
@@ -442,8 +442,9 @@ stack. `node.awake` reads (or forces) the state; it's `False` while asleep.
 
 The player (`game/player.py`) is a `rome.CharacterController` rather than a dynamic
 body: a kinematic sphere that slides along solids. Move it with `body.move(delta,
-scene)` — it substeps long moves for the same no-tunnelling reason. That's the
-right tool for a character; dynamic solids are for props, projectiles and debris.
+scene)` — it sweeps each move to its exact first contact, so even one big step
+can't tunnel a wall. That's the right tool for a character; dynamic solids are for
+props, projectiles and debris.
 """
 
 _EVENTS_DOC = """\
